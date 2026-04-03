@@ -53,6 +53,7 @@ class SettingsUpdateRequest(BaseModel):
     """Request body for PATCH /api/settings."""
 
     min_write_interval_seconds: int | None = Field(default=None, ge=1)
+    columns_per_row: int | None = Field(default=None, ge=1, le=12)
 
 
 class TagOrderRequest(BaseModel):
@@ -94,6 +95,7 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
             [t.name for t in new_config.tags],
             state.dashboard_path,
             state.dashboard_title,
+            new_config.dashboard.columns_per_row,
         )
 
 
@@ -209,19 +211,30 @@ def create_app(state: AppState) -> FastAPI:
         return {
             "min_write_interval_seconds": collector.min_write_interval_seconds,
             "victoriametrics_url": collector.victoriametrics_url,
+            "columns_per_row": state.config.dashboard.columns_per_row,
         }
 
     @app.patch("/api/settings")
     async def update_settings(body: SettingsUpdateRequest) -> dict[str, Any]:
-        new_collector = state.config.collector.model_copy(
-            update=body.model_dump(exclude_unset=True)
+        updates: dict[str, Any] = {}
+        collector_fields = body.model_dump(
+            exclude_unset=True, exclude={"columns_per_row"}
         )
-        new_config = state.config.model_copy(update={"collector": new_collector})
+        if collector_fields:
+            updates["collector"] = state.config.collector.model_copy(
+                update=collector_fields
+            )
+        if body.columns_per_row is not None:
+            updates["dashboard"] = state.config.dashboard.model_copy(
+                update={"columns_per_row": body.columns_per_row}
+            )
+        new_config = state.config.model_copy(update=updates)
         _apply_config(state, new_config)
         collector = new_config.collector
         return {
             "min_write_interval_seconds": collector.min_write_interval_seconds,
             "victoriametrics_url": collector.victoriametrics_url,
+            "columns_per_row": new_config.dashboard.columns_per_row,
         }
 
     @app.get("/api/db-stats")

@@ -14,6 +14,7 @@ def _stat_panel(
     unit: str,
     y: int,
     x: int,
+    w: int = 4,
     *,
     color_mode: str = "thresholds",
     fixed_color: str | None = None,
@@ -34,7 +35,7 @@ def _stat_panel(
         "type": "stat",
         "id": panel_id,
         "title": title,
-        "gridPos": {"h": 3, "w": 4, "x": x, "y": y},
+        "gridPos": {"h": 3, "w": w, "x": x, "y": y},
         "datasource": {"type": "prometheus", "uid": ""},
         "fieldConfig": {"defaults": field_defaults, "overrides": []},
         "options": {
@@ -116,8 +117,8 @@ def _timeseries_panel(
     }
 
 
-COLS_PER_ROW = 5
-STAT_W = 4
+GRID_W = 24
+DEFAULT_COLUMNS_PER_ROW = 6
 
 
 def _stat_grid(
@@ -127,20 +128,22 @@ def _stat_grid(
     start_id: int,
     start_y: int,
     *,
+    columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
     color_mode: str = "thresholds",
     fixed_color: str | None = None,
     thresholds: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
-    """Lay out stat panels in rows of COLS_PER_ROW.
+    """Lay out stat panels in rows.
 
     Returns (panels, next_id, next_y).
     """
+    stat_w = GRID_W // columns_per_row
     panels: list[dict[str, Any]] = []
     panel_id = start_id
     for i, name in enumerate(names):
-        row = i // COLS_PER_ROW
-        col = i % COLS_PER_ROW
-        x = col * STAT_W
+        row = i // columns_per_row
+        col = i % columns_per_row
+        x = col * stat_w
         y = start_y + row * 3
         expr = f'ruuvi_{metric}{{name="{name}"}}'
         panels.append(
@@ -151,6 +154,7 @@ def _stat_grid(
                 unit,
                 y,
                 x,
+                stat_w,
                 color_mode=color_mode,
                 fixed_color=fixed_color,
                 thresholds=thresholds,
@@ -158,7 +162,7 @@ def _stat_grid(
         )
         panel_id += 1
     if names:
-        last_row = (len(names) - 1) // COLS_PER_ROW
+        last_row = (len(names) - 1) // columns_per_row
         next_y = start_y + (last_row + 1) * 3
     else:
         next_y = start_y
@@ -168,6 +172,7 @@ def _stat_grid(
 def generate_dashboard(
     tag_names: list[str],
     title: str = "Ruuvi Dashboard",
+    columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> dict[str, Any]:
     """Build a complete Grafana dashboard dict from tag names."""
     panels: list[dict[str, Any]] = []
@@ -185,6 +190,7 @@ def generate_dashboard(
         "celsius",
         panel_id,
         y,
+        columns_per_row=columns_per_row,
         thresholds=[
             {"color": "blue", "value": None},
             {"color": "red", "value": 0},
@@ -203,6 +209,7 @@ def generate_dashboard(
         "percent",
         panel_id,
         y,
+        columns_per_row=columns_per_row,
         color_mode="fixed",
         fixed_color="green",
     )
@@ -317,9 +324,10 @@ def write_dashboard(
     tag_names: list[str],
     path: str,
     title: str = "Ruuvi Dashboard",
+    columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> None:
     """Generate and write the Grafana dashboard JSON to disk."""
-    dashboard = generate_dashboard(tag_names, title)
+    dashboard = generate_dashboard(tag_names, title, columns_per_row)
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))

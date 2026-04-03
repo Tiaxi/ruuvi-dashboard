@@ -180,6 +180,7 @@ class TestSettings:
         data = resp.json()
         assert "min_write_interval_seconds" in data
         assert "victoriametrics_url" in data
+        assert data["columns_per_row"] == 6
 
     async def test_update_min_interval(self, client, app_state):
         resp = await client.patch(
@@ -193,6 +194,12 @@ class TestSettings:
             "/api/settings", json={"min_write_interval_seconds": None}
         )
         assert resp.json()["min_write_interval_seconds"] is None
+
+    async def test_update_columns_per_row(self, client, app_state):
+        resp = await client.patch("/api/settings", json={"columns_per_row": 4})
+        assert resp.status_code == 200
+        assert resp.json()["columns_per_row"] == 4
+        assert app_state.config.dashboard.columns_per_row == 4
 
     async def test_update_persists_to_yaml(self, client, app_state):
         await client.patch("/api/settings", json={"min_write_interval_seconds": 60})

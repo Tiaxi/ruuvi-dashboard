@@ -62,14 +62,20 @@ class TestGenerateDashboard:
                     )
                     occupied.add(cell)
 
-    def test_stat_panel_width_is_4(self):
+    def test_stat_panel_width_default_6_columns(self):
         d = generate_dashboard(["A", "B", "C"])
         stats = [p for p in d["panels"] if p["type"] == "stat"]
         for s in stats:
-            assert s["gridPos"]["w"] == 4
+            assert s["gridPos"]["w"] == 4  # 24 // 6
 
-    def test_max_5_stat_panels_per_row(self):
-        d = generate_dashboard(["A", "B", "C", "D", "E", "F"])
+    def test_stat_panel_width_adapts_to_columns(self):
+        d = generate_dashboard(["A", "B"], columns_per_row=4)
+        stats = [p for p in d["panels"] if p["type"] == "stat"]
+        for s in stats:
+            assert s["gridPos"]["w"] == 6  # 24 // 4
+
+    def test_default_6_panels_per_row(self):
+        d = generate_dashboard(["A", "B", "C", "D", "E", "F", "G"])
         temp_stats = [
             p
             for p in d["panels"]
@@ -78,8 +84,21 @@ class TestGenerateDashboard:
         row1_y = temp_stats[0]["gridPos"]["y"]
         row1 = [p for p in temp_stats if p["gridPos"]["y"] == row1_y]
         row2 = [p for p in temp_stats if p["gridPos"]["y"] == row1_y + 3]
-        assert len(row1) == 5
+        assert len(row1) == 6
         assert len(row2) == 1
+
+    def test_custom_columns_per_row(self):
+        d = generate_dashboard(["A", "B", "C", "D", "E"], columns_per_row=3)
+        temp_stats = [
+            p
+            for p in d["panels"]
+            if p["type"] == "stat" and "temperature" in p["targets"][0]["expr"]
+        ]
+        row1_y = temp_stats[0]["gridPos"]["y"]
+        row1 = [p for p in temp_stats if p["gridPos"]["y"] == row1_y]
+        row2 = [p for p in temp_stats if p["gridPos"]["y"] == row1_y + 3]
+        assert len(row1) == 3
+        assert len(row2) == 2
 
 
 class TestWriteDashboard:

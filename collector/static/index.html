@@ -247,6 +247,8 @@
     <div class="settings-form">
       <label for="min-interval">Min write interval (seconds):</label>
       <input type="number" id="min-interval" min="1" placeholder="None">
+      <label for="columns-per-row">Panels per row:</label>
+      <input type="number" id="columns-per-row" min="1" max="12" style="width:60px">
       <button class="primary" onclick="saveSettings()">Save</button>
       <span id="settings-vm-url" class="vm-url"></span>
     </div>
@@ -449,14 +451,18 @@ async function toggleTag(mac, enabled) {
 async function loadSettings() {
   const res = await fetch(`${API}/api/settings`);
   const data = await res.json();
-  const input = document.getElementById('min-interval');
-  input.value = data.min_write_interval_seconds ?? '';
+  document.getElementById('min-interval').value = data.min_write_interval_seconds ?? '';
+  document.getElementById('columns-per-row').value = data.columns_per_row ?? '';
   document.getElementById('settings-vm-url').textContent = `VictoriaMetrics: ${data.victoriametrics_url}`;
 }
 
 async function saveSettings() {
-  const val = document.getElementById('min-interval').value;
-  const body = {min_write_interval_seconds: val ? parseInt(val) : null};
+  const interval = document.getElementById('min-interval').value;
+  const cols = document.getElementById('columns-per-row').value;
+  const body = {};
+  if (interval) body.min_write_interval_seconds = parseInt(interval);
+  else body.min_write_interval_seconds = null;
+  if (cols) body.columns_per_row = parseInt(cols);
   const res = await fetch(`${API}/api/settings`, {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json'},

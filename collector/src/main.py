@@ -62,7 +62,12 @@ async def run() -> None:
         dashboard_title=dashboard_title,
     )
 
-    write_dashboard([t.name for t in config.tags], dashboard_path, dashboard_title)
+    write_dashboard(
+        [t.name for t in config.tags],
+        dashboard_path,
+        dashboard_title,
+        config.dashboard.columns_per_row,
+    )
 
     def on_config_change(new_config: AppConfig) -> None:
         def apply() -> None:
@@ -73,6 +78,7 @@ async def run() -> None:
                 [t.name for t in new_config.tags],
                 dashboard_path,
                 dashboard_title,
+                new_config.dashboard.columns_per_row,
             )
             logger.info("Applied config change, dashboard regenerated")
 

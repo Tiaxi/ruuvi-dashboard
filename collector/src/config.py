@@ -33,6 +33,12 @@ class TagConfig(BaseModel):
         return v.upper()
 
 
+class DashboardConfig(BaseModel):
+    """Dashboard layout settings."""
+
+    columns_per_row: int = 6
+
+
 class CollectorConfig(BaseModel):
     """Collector-level settings."""
 
@@ -45,6 +51,7 @@ class AppConfig(BaseModel):
 
     tags: list[TagConfig] = []
     collector: CollectorConfig = CollectorConfig()
+    dashboard: DashboardConfig = DashboardConfig()
 
     @property
     def enabled_tags_map(self) -> dict[str, TagConfig]:
