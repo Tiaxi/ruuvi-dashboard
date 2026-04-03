@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ruuvi Dashboard</title>
+<script>
+  // Apply theme before any rendering to prevent flash
+  (function() {
+    var s = localStorage.getItem('theme') || 'auto';
+    var t = s === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : s;
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --bg-card: #ffffff;
+    --bg-header: #1a1a2e;
+    --bg-section-head: #e8eaed;
+    --text: #1a1a1a;
+    --text-secondary: #5f6368;
+    --text-muted: #9aa0a6;
+    --border: #dadce0;
+    --border-light: #f1f3f4;
+    --hover: #f8f9fa;
+    --input-bg: #ffffff;
+    --input-border: #dadce0;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-hover: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+    --accent: #1a73e8;
+    --accent-hover: #1557b0;
+    --danger: #d93025;
+    --danger-hover: #b3261e;
+    --success: #188038;
+    --success-hover: #146c2e;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+
+  [data-theme="dark"] {
+    --bg: #121212;
+    --bg-card: #1e1e1e;
+    --bg-header: #0d0d1a;
+    --bg-section-head: #2a2a2a;
+    --text: #e3e3e3;
+    --text-secondary: #a0a0a0;
+    --text-muted: #666;
+    --border: #333;
+    --border-light: #2a2a2a;
+    --hover: #252525;
+    --input-bg: #2a2a2a;
+    --input-border: #444;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-hover: 0 4px 8px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.5;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  header {
+    background: var(--bg-header); color: #fff;
+    padding: 0.9rem 2rem;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0; z-index: 10;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  header h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.01em; }
+  .header-right { display: flex; align-items: center; gap: 1.2rem; }
+  #status { font-size: 0.8rem; opacity: 0.7; }
+
+  .theme-toggle {
+    display: flex; align-items: center; gap: 0.3rem;
+    background: rgba(255,255,255,0.1); border-radius: 20px; padding: 0.2rem;
+  }
+  .theme-toggle button {
+    background: none; border: none; color: rgba(255,255,255,0.5);
+    cursor: pointer; padding: 0.25rem 0.5rem; border-radius: 16px;
+    font-size: 0.85rem; transition: all 0.15s;
+  }
+  .theme-toggle button:hover { color: rgba(255,255,255,0.8); }
+  .theme-toggle button.active {
+    background: rgba(255,255,255,0.2); color: #fff;
+  }
+
+  main { max-width: 1140px; margin: 1.5rem auto; padding: 0 1rem; }
+
+  section {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 1.25rem;
+    overflow: hidden;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  section:hover { box-shadow: var(--shadow-hover); }
+
+  section h2 {
+    padding: 0.7rem 1.2rem;
+    background: var(--bg-section-head);
+    font-size: 0.85rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s, color 0.2s;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { padding: 0.55rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border-light); }
+  th {
+    font-weight: 600; font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--text-muted);
+  }
+  tr { transition: background 0.1s; }
+  tr:hover { background: var(--hover); }
+  tr:last-child td { border-bottom: none; }
+
+  .actions { white-space: nowrap; }
+  .actions button { margin-right: 0.25rem; }
+
+  .drag-handle { cursor: grab; color: var(--text-muted); text-align: center; width: 2rem; user-select: none; }
+  tr.dragging { opacity: 0.4; }
+  tr.drag-over { border-top: 2px solid var(--accent); }
+
+  button {
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card); color: var(--text);
+    cursor: pointer; font-size: 0.8rem; font-weight: 500;
+    transition: all 0.15s;
+  }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  button.danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
+  button.success { background: var(--success); color: #fff; border-color: var(--success); }
+  button.success:hover { background: var(--success-hover); border-color: var(--success-hover); }
+
+  .settings-form {
+    padding: 1rem 1.2rem;
+    display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  }
+  .settings-form label { font-size: 0.88rem; font-weight: 500; }
+  .settings-form input {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    width: 100px;
+    background: var(--input-bg); color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .settings-form input:focus { outline: none; border-color: var(--accent); }
+
+  .empty { padding: 2rem; text-align: center; color: var(--text-muted); font-style: italic; }
+  .toggle { cursor: pointer; font-size: 1.1rem; }
+  .mac { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 0.82rem; color: var(--text-secondary); }
+  .reading-null { color: var(--text-muted); }
+
+  .db-stats { padding: 1rem 1.2rem; font-size: 0.88rem; }
+  .db-stats-grid {
+    display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 0.5rem;
+  }
+  .db-stat-item {
+    display: flex; flex-direction: column; gap: 0.15rem;
+  }
+  .db-stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+  .db-stat-value { font-size: 1.1rem; font-weight: 600; }
+
+  details summary {
+    cursor: pointer; font-size: 0.82rem; color: var(--text-muted);
+    padding: 0.3rem 0; user-select: none;
+  }
+  details summary:hover { color: var(--text-secondary); }
+  details table { margin-top: 0.3rem; font-size: 0.82rem; }
+  details td { padding: 0.2rem 0.8rem 0.2rem 0; border: none; }
+
+  .vm-url { font-size: 0.82rem; color: var(--text-muted); margin-left: 0.5rem; }
+
+  @media (max-width: 768px) {
+    header { padding: 0.7rem 1rem; flex-wrap: wrap; gap: 0.5rem; }
+    main { padding: 0 0.5rem; }
+    .db-stats-grid { gap: 1rem; }
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.4rem 0.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ruuvi Dashboard</h1>
+  <div class="header-right">
+    <div id="status">Loading...</div>
+    <div class="theme-toggle">
+      <button onclick="setTheme('light')" id="theme-light" title="Light">L</button>
+      <button onclick="setTheme('auto')" id="theme-auto" title="System default">A</button>
+      <button onclick="setTheme('dark')" id="theme-dark" title="Dark">D</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>Configured Tags</h2>
+    <div id="tags-container">
+      <table>
+        <thead>
+          <tr>
+            <th></th><th>Name</th><th>MAC</th><th>Temp</th><th>Humidity</th><th>Pressure</th>
+            <th>Battery</th><th>RSSI</th><th>Last Seen</th><th>Enabled</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tags-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Discovered Tags</h2>
+    <div id="discovered-container">
+      <table>
+        <thead>
+          <tr>
+            <th>MAC</th><th>Temp</th><th>Humidity</th><th>Battery</th><th>RSSI</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="discovered-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Database</h2>
+    <div id="db-stats" class="db-stats">Loading...</div>
+  </section>
+
+  <section>
+    <h2>Settings</h2>
+    <div class="settings-form">
+      <label for="min-interval">Min write interval (seconds):</label>
+      <input type="number" id="min-interval" min="1" placeholder="None">
+      <button class="primary" onclick="saveSettings()">Save</button>
+      <span id="settings-vm-url" class="vm-url"></span>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = '';
+let refreshTimer;
+
+// Theme
+function getSystemTheme() {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(effective) {
+  document.documentElement.setAttribute('data-theme', effective);
+}
+
+function setTheme(choice) {
+  localStorage.setItem('theme', choice);
+  const effective = choice === 'auto' ? getSystemTheme() : choice;
+  applyTheme(effective);
+  updateThemeButtons(choice);
+}
+
+function updateThemeButtons(choice) {
+  document.getElementById('theme-light').classList.toggle('active', choice === 'light');
+  document.getElementById('theme-auto').classList.toggle('active', choice === 'auto');
+  document.getElementById('theme-dark').classList.toggle('active', choice === 'dark');
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('theme') || 'auto';
+  const effective = saved === 'auto' ? getSystemTheme() : saved;
+  applyTheme(effective);
+  updateThemeButtons(saved);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if ((localStorage.getItem('theme') || 'auto') === 'auto') applyTheme(getSystemTheme());
+  });
+}
+
+initTheme();
+
+// Data
+async function refresh() {
+  try {
+    const [tagsRes, discoveredRes, healthRes, dbRes] = await Promise.all([
+      fetch(`${API}/api/tags`),
+      fetch(`${API}/api/discovered`),
+      fetch(`${API}/api/health`),
+      fetch(`${API}/api/db-stats`),
+    ]);
+    const tags = await tagsRes.json();
+    const discovered = await discoveredRes.json();
+    const health = await healthRes.json();
+    const dbStats = await dbRes.json();
+    renderTags(tags);
+    renderDiscovered(discovered);
+    renderHealth(health);
+    renderDbStats(dbStats);
+    loadSettings();
+  } catch (e) {
+    document.getElementById('status').textContent = 'Connection error';
+  }
+}
+
+function renderHealth(h) {
+  const mins = Math.floor(h.uptime_seconds / 60);
+  const hrs = Math.floor(mins / 60);
+  const m = mins % 60;
+  const uptime = hrs > 0 ? `${hrs}h ${m}m` : `${m}m`;
+  document.getElementById('status').textContent =
+    `Uptime: ${uptime} | Tags: ${h.tag_count} | Enabled: ${h.enabled_tag_count}`;
+}
+
+function fmtBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function fmtNum(n) {
+  return n != null ? n.toLocaleString() : '-';
+}
+
+function renderDbStats(s) {
+  const el = document.getElementById('db-stats');
+  const series = (s.series_by_metric || []).map(m =>
+    `<tr><td style="font-family:monospace">${esc(m.name)}</td><td>${m.count}</td></tr>`
+  ).join('');
+  el.innerHTML = `
+    <div class="db-stats-grid">
+      <div class="db-stat-item"><span class="db-stat-label">Storage</span><span class="db-stat-value">${fmtBytes(s.storage_bytes || 0)}</span></div>
+      <div class="db-stat-item"><span class="db-stat-label">Data points</span><span class="db-stat-value">${fmtNum(s.total_datapoints)}</span></div>
+      <div class="db-stat-item"><span class="db-stat-label">Time series</span><span class="db-stat-value">${fmtNum(s.total_series)}</span></div>
+    </div>
+    ${series ? `<details><summary>Series by metric</summary><table>${series}</table></details>` : ''}
+  `;
+}
+
+function fmt(val, unit, decimals) {
+  if (val == null) return '<span class="reading-null">\u2014</span>';
+  return `${Number(val).toFixed(decimals)}${unit}`;
+}
+
+function fmtTime(ts) {
+  if (!ts) return '<span class="reading-null">\u2014</span>';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString();
+}
+
+function renderTags(tags) {
+  const tbody = document.getElementById('tags-body');
+  if (tags.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">No tags configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tags.map(t => `
+    <tr draggable="true" data-mac="${t.mac}"
+        ondragstart="dragStart(event)" ondragover="dragOver(event)"
+        ondrop="drop(event)" ondragend="dragEnd(event)">
+      <td class="drag-handle">&#x2630;</td>
+      <td>${esc(t.name)}</td>
+      <td class="mac">${esc(t.mac)}</td>
+      <td>${fmt(t.reading?.temperature, '\u00b0C', 1)}</td>
+      <td>${fmt(t.reading?.humidity, '%', 1)}</td>
+      <td>${fmt(t.reading?.pressure, ' hPa', 1)}</td>
+      <td>${fmt(t.reading?.battery_voltage, ' V', 2)}</td>
+      <td>${t.rssi != null ? t.rssi + ' dBm' : '<span class="reading-null">\u2014</span>'}</td>
+      <td>${fmtTime(t.last_seen)}</td>
+      <td><span class="toggle" onclick="toggleTag('${t.mac}', ${!t.enabled})">${t.enabled ? '\u2705' : '\u274c'}</span></td>
+      <td class="actions">
+        <button onclick="editTag('${t.mac}')">Edit</button>
+        <button class="danger" onclick="deleteTag('${t.mac}')">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderDiscovered(tags) {
+  const tbody = document.getElementById('discovered-body');
+  if (tags.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No discovered tags</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tags.map(t => `
+    <tr>
+      <td class="mac">${esc(t.mac)}</td>
+      <td>${fmt(t.reading?.temperature, '\u00b0C', 1)}</td>
+      <td>${fmt(t.reading?.humidity, '%', 1)}</td>
+      <td>${fmt(t.reading?.battery_voltage, ' V', 2)}</td>
+      <td>${t.rssi != null ? t.rssi + ' dBm' : '\u2014'}</td>
+      <td><button class="success" onclick="addTag('${t.mac}')">Add</button></td>
+    </tr>
+  `).join('');
+}
+
+async function addTag(mac) {
+  const name = prompt(`Name for tag ${mac}:`);
+  if (!name) return;
+  const res = await fetch(`${API}/api/tags`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mac, name}),
+  });
+  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  refresh();
+}
+
+async function editTag(mac) {
+  const name = prompt(`New name for ${mac}:`);
+  if (!name) return;
+  const res = await fetch(`${API}/api/tags/${mac}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  refresh();
+}
+
+async function deleteTag(mac) {
+  if (!confirm(`Delete tag ${mac}?`)) return;
+  const res = await fetch(`${API}/api/tags/${mac}`, {method: 'DELETE'});
+  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  refresh();
+}
+
+async function toggleTag(mac, enabled) {
+  await fetch(`${API}/api/tags/${mac}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled}),
+  });
+  refresh();
+}
+
+async function loadSettings() {
+  const res = await fetch(`${API}/api/settings`);
+  const data = await res.json();
+  const input = document.getElementById('min-interval');
+  input.value = data.min_write_interval_seconds ?? '';
+  document.getElementById('settings-vm-url').textContent = `VictoriaMetrics: ${data.victoriametrics_url}`;
+}
+
+async function saveSettings() {
+  const val = document.getElementById('min-interval').value;
+  const body = {min_write_interval_seconds: val ? parseInt(val) : null};
+  const res = await fetch(`${API}/api/settings`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    refresh();
+  } else {
+    alert(`Error: ${(await res.json()).detail}`);
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Drag-and-drop tag reordering
+let draggedMac = null;
+
+function dragStart(e) {
+  draggedMac = e.target.closest('tr').dataset.mac;
+  e.target.closest('tr').classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function dragOver(e) {
+  e.preventDefault();
+  const row = e.target.closest('tr');
+  if (row && row.dataset.mac !== draggedMac) {
+    document.querySelectorAll('tr.drag-over').forEach(r => r.classList.remove('drag-over'));
+    row.classList.add('drag-over');
+  }
+}
+
+function dragEnd(e) {
+  document.querySelectorAll('.dragging, .drag-over').forEach(r =>
+    r.classList.remove('dragging', 'drag-over'));
+  draggedMac = null;
+}
+
+async function drop(e) {
+  e.preventDefault();
+  const targetRow = e.target.closest('tr');
+  if (!targetRow || !draggedMac) return;
+  const targetMac = targetRow.dataset.mac;
+  if (draggedMac === targetMac) return;
+
+  const rows = [...document.querySelectorAll('#tags-body tr[data-mac]')];
+  const macs = rows.map(r => r.dataset.mac);
+  const fromIdx = macs.indexOf(draggedMac);
+  const toIdx = macs.indexOf(targetMac);
+  macs.splice(fromIdx, 1);
+  macs.splice(toIdx, 0, draggedMac);
+
+  await fetch(`${API}/api/tags/order`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({macs}),
+  });
+  dragEnd(e);
+  refresh();
+}
+
+refresh();
+refreshTimer = setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+[project]
+name = "ruuvi-collector"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "bleak>=0.22,<1.0",
+    "pyyaml>=6.0,<7.0",
+    "pydantic>=2.0,<3.0",
+    "aiohttp>=3.9,<4.0",
+    "watchdog>=4.0,<6.0",
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.34,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "aioresponses>=0.7,<1.0",
+    "httpx>=0.28,<1.0",
+    "ruff>=0.11",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",  # trailing commas — conflicts with ruff formatter
+    "D203",    # blank line before class docstring — incompatible with D211
+    "D213",    # multi-line summary second line — incompatible with D212
+    "G004",    # f-string logging — readable and fine for applications
+    "D107",    # __init__ docstrings rarely add value beyond the class docstring
+    "ISC001",  # implicit string concatenation — conflicts with ruff formatter
+    "TC001",   # TYPE_CHECKING imports add complexity in application code
+    "TC003",   # same rationale as TC001, for stdlib imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/api.py" = [
+    "C901",     # create_app defines all routes — standard FastAPI pattern
+    "PLR0915",  # create_app necessarily has many statements
+    "PLR2004",  # HTTP status codes (200, 400) are clear without named constants
+]
+"src/config.py" = [
+    "SLF001",   # _ConfigFileHandler accesses parent watcher's private method by design
+]
+"src/dashboard.py" = [
+    "PLR0913",  # private builder functions need many parameters for Grafana JSON
+]
+"src/decoder.py" = [
+    "ERA001",   # protocol documentation comments are not commented-out code
+    "PLR2004",  # protocol sentinel values are clearer inline than as constants
+]
+"src/main.py" = [
+    "S104",     # binding to 0.0.0.0 is required inside Docker container
+]
+"src/scanner.py" = [
+    "ARG002",   # BleakScanner callback requires device parameter
+    "BLE001",   # broad exceptions in BLE scan loop are intentional for resilience
+]
+"tests/*" = [
+    "ANN",      # type annotations on tests and fixtures add no value
+    "ARG002",   # test methods receive fixtures by name even if only used for side effects
+    "ASYNC",    # async linting rules are not applicable to test code
+    "D",        # docstrings on tests are noise
+    "E402",     # test files group imports with the test classes that need them
+    "INP001",   # tests/ doesn't need __init__.py
+    "PLC0415",  # inline imports in tests are fine for readability
+    "PLR0913",  # test helper functions have many parameters for building test data
+    "PLR2004",  # magic values in test assertions are readable
+    "RUF012",   # mutable class constants in test classes are fine
+    "S101",     # assert is how pytest works
+    "S105",     # hardcoded passwords in test fixtures
+    "S106",     # hardcoded password arguments in test fixtures
+    "S108",     # /tmp paths in test fixtures
+    "SIM117",   # nested with statements can be clearer in tests
+]
