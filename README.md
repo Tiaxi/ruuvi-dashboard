@@ -4,13 +4,13 @@ Self-hosted monitoring for [Ruuvi](https://ruuvi.com/) BLE sensor tags with a Py
 
 ## Architecture
 
-```mermaid
-graph LR
-    Tags[Ruuvi Tags] -->|BLE| Collector
-    Collector -->|remote write| VM[VictoriaMetrics]
-    Collector -->|generate JSON| Dash[dashboards/ruuvi.json]
-    VM -->|PromQL| Grafana
-    Dash -->|provision| Grafana
+```
+Ruuvi Tags ─── BLE ──▶ Collector ─── remote write ──▶ VictoriaMetrics
+                            │                                │
+                       generate JSON                      PromQL
+                            │                                │
+                            ▼                                ▼
+                   dashboards/ruuvi.json ── provision ──▶ Grafana
 ```
 
 ## Features
