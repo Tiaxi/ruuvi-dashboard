@@ -71,6 +71,9 @@ tags:
 collector:
   # min_write_interval_seconds: 60   # optional write throttle
   victoriametrics_url: "http://victoriametrics:8428"
+
+dashboard:
+  columns_per_row: 6        # stat panels per row (default 6)
 ```
 
 Tags can also be added, renamed, reordered, and deleted through the admin UI — changes are saved to `config.yaml` automatically.
@@ -82,7 +85,7 @@ The collector serves a web UI on port 8000 (configurable via `ADMIN_PORT`):
 - **Configured Tags** — live readings, enable/disable, edit, delete, and drag-and-drop reordering
 - **Discovered Tags** — unconfigured tags detected nearby, with one-click add
 - **Database** — VictoriaMetrics storage statistics
-- **Settings** — write interval configuration
+- **Settings** — write interval and dashboard layout (panels per row)
 
 ## Grafana Dashboard
 

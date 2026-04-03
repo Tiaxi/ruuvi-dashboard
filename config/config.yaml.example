@@ -10,3 +10,6 @@ tags:
 collector:
   # min_write_interval_seconds: 60  # optional — omit to write every received reading
   victoriametrics_url: "http://victoriametrics:8428"
+
+dashboard:
+  columns_per_row: 6  # stat panels per row (auto-sizes width to fill the grid)
