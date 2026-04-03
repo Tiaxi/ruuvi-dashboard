@@ -159,6 +159,18 @@
   }
   .settings-form input:focus { outline: none; border-color: var(--accent); }
 
+  .toast {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    padding: 0.6rem 1.2rem; border-radius: var(--radius-sm);
+    background: var(--success); color: #fff;
+    font-size: 0.88rem; font-weight: 500;
+    box-shadow: var(--shadow-hover);
+    opacity: 0; transform: translateY(0.5rem);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none; z-index: 100;
+  }
+  .toast.visible { opacity: 1; transform: translateY(0); }
+
   .empty { padding: 2rem; text-align: center; color: var(--text-muted); font-style: italic; }
   .toggle { cursor: pointer; font-size: 1.1rem; }
   .mac { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 0.82rem; color: var(--text-secondary); }
@@ -254,6 +266,7 @@
     </div>
   </section>
 </main>
+<div id="toast" class="toast"></div>
 
 <script>
 const API = '';
@@ -469,10 +482,18 @@ async function saveSettings() {
     body: JSON.stringify(body),
   });
   if (res.ok) {
+    showToast('Settings saved');
     refresh();
   } else {
     alert(`Error: ${(await res.json()).detail}`);
   }
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 2000);
 }
 
 function esc(s) {
