@@ -220,3 +220,15 @@ class TestSaveConfig:
         save_config(config, path)
         reloaded = load_config(path)
         assert reloaded.collector.min_write_interval_seconds is None
+
+    def test_save_default_config_creates_loadable_file(self, tmp_path):
+        """Saving a default AppConfig produces a file that loads back with defaults."""
+        path = str(tmp_path / "subdir" / "config.yaml")
+        from pathlib import Path
+
+        Path(path).parent.mkdir(parents=True)
+        save_config(AppConfig(), path)
+        reloaded = load_config(path)
+        assert reloaded.tags == []
+        assert reloaded.collector.victoriametrics_url == "http://victoriametrics:8428"
+        assert reloaded.dashboard.columns_per_row == 6

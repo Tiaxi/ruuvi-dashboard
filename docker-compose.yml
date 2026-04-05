@@ -45,6 +45,7 @@ services:
       - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s${GRAFANA_SUBPATH:-/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=${GRAFANA_SUBPATH:+true}
       - GF_BRANDING_APP_TITLE=${DASHBOARD_TITLE:-Ruuvi Dashboard}
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/ruuvi.json
       - GF_AUTH_DISABLE_SIGNOUT_MENU=true
     depends_on:
       - victoriametrics

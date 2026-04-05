@@ -8,11 +8,12 @@ import logging
 import os
 import signal
 import time
+from pathlib import Path
 
 import uvicorn
 
 from api import AppState, create_app
-from config import AppConfig, ConfigWatcher, ReadingsStore, load_config
+from config import AppConfig, ConfigWatcher, ReadingsStore, load_config, save_config
 from dashboard import write_dashboard
 from scanner import RuuviScanner
 from writer import MetricsWriter
@@ -26,11 +27,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = "/config/config.yaml"
 
 
+def _ensure_config(config_path: str) -> AppConfig:
+    """Load config from disk, creating a default file if it doesn't exist."""
+    config_file = Path(config_path)
+    if not config_file.exists():
+        logger.info("Config file not found at %s, creating default", config_path)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        save_config(AppConfig(), config_path)
+
+    logger.info("Loading config from %s", config_path)
+    return load_config(config_path)
+
+
 async def run() -> None:
     """Start the collector, scanner, API server, and config watcher."""
     config_path = os.environ.get("CONFIG_PATH", DEFAULT_CONFIG_PATH)
-    logger.info("Loading config from %s", config_path)
-    config = load_config(config_path)
+    config = _ensure_config(config_path)
     logger.info(
         "Loaded %d tags (%d enabled)",
         len(config.tags),
