@@ -16,6 +16,24 @@ class TestGenerateDashboard:
         d = generate_dashboard(["A"], title="My Weather")
         assert d["title"] == "My Weather"
 
+    def test_first_section_identifies_kiosk_dashboard(self):
+        d = generate_dashboard(["A"], title="My Weather")
+        first_panel = d["panels"][0]
+        assert first_panel["type"] == "row"
+        assert first_panel["title"] == "My Weather - Temperatures"
+        assert first_panel["gridPos"] == {"h": 1, "w": 24, "x": 0, "y": 0}
+
+    def test_sections_remain_collapsible_rows(self):
+        d = generate_dashboard(["A"], title="My Weather")
+        rows = [p for p in d["panels"] if p["type"] == "row"]
+        assert [p["title"] for p in rows] == [
+            "My Weather - Temperatures",
+            "Humidity",
+            "History",
+            "Extra",
+        ]
+        assert all(p["collapsed"] is False for p in rows)
+
     def test_temperature_stat_panels_match_tag_order(self):
         d = generate_dashboard(["Zebra", "Alpha", "Middle"])
         temp_stats = [

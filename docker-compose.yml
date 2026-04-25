@@ -47,6 +47,7 @@ services:
       - GF_SECURITY_COOKIE_SECURE=true
       - GF_SECURITY_COOKIE_SAMESITE=strict
       - GF_SECURITY_CONTENT_SECURITY_POLICY=true
+      - GF_SERVER_DOMAIN=${GRAFANA_DOMAIN:-localhost}
       - GF_SERVER_ENFORCE_DOMAIN=true
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-%(protocol)s://%(domain)s:%(http_port)s/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=${GRAFANA_SUBPATH:+true}

@@ -180,7 +180,7 @@ def generate_dashboard(
     y = 0
 
     # Temperature stats section
-    panels.append(_row_panel(panel_id, "Temperatures", y))
+    panels.append(_row_panel(panel_id, f"{title} - Temperatures", y))
     panel_id += 1
     y += 1
 
