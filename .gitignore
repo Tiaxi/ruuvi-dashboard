@@ -6,4 +6,5 @@ __pycache__/
 config/config.yaml
 .env
 .claude/
+/.codex
 /dashboards/
