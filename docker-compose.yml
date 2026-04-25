@@ -42,7 +42,13 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s${GRAFANA_SUBPATH:-/}
+      - GF_AUTH_ANONYMOUS_HIDE_VERSION=true
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_COOKIE_SAMESITE=strict
+      - GF_SECURITY_CONTENT_SECURITY_POLICY=true
+      - GF_SERVER_ENFORCE_DOMAIN=true
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-%(protocol)s://%(domain)s:%(http_port)s/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=${GRAFANA_SUBPATH:+true}
       - GF_BRANDING_APP_TITLE=${DASHBOARD_TITLE:-Ruuvi Dashboard}
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/ruuvi.json

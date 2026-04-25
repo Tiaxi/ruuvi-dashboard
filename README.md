@@ -52,7 +52,8 @@ Add tags via the admin UI — they appear in the dashboard within 30 seconds.
 | Variable | Default | Description |
 |---|---|---|
 | `DASHBOARD_TITLE` | `Ruuvi Dashboard` | Dashboard title in Grafana and browser tab |
-| `GRAFANA_SUBPATH` | *(empty)* | Serve Grafana under a subpath (e.g. `/grafana/`) for reverse proxies |
+| `GRAFANA_ROOT_URL` | `http://localhost:3000/` | Public Grafana URL as seen by browsers; set to your reverse proxy URL, e.g. `https://saa.example.com/` |
+| `GRAFANA_SUBPATH` | *(empty)* | Serve Grafana under a subpath (e.g. `/grafana/`) for reverse proxies; include the same path in `GRAFANA_ROOT_URL` |
 | `ADMIN_PORT` | `8000` | Host port for the admin UI |
 | `GRAFANA_PORT` | `3000` | Host port for Grafana |
 | `GF_ADMIN_PASSWORD` | `admin` | Grafana admin password (only used on first start) |
