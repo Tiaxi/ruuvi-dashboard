@@ -85,6 +85,27 @@ class TestDecodeRawv2:
         assert r.battery_voltage is None
         assert r.tx_power is None
 
+    @pytest.mark.parametrize(
+        ("power_info_raw", "expected_voltage", "expected_tx_power"),
+        [
+            (0xFFF6, None, 4),
+            (0xAC3F, 2.977, None),
+            (0xFFFF, None, None),
+            (0x0000, 1.600, -40),
+            (0xFFDE, 3.646, 20),
+        ],
+    )
+    def test_power_fields_have_independent_sentinels(
+        self, power_info_raw, expected_voltage, expected_tx_power
+    ):
+        r = decode_rawv2(_build_payload(power_info_raw=power_info_raw))
+        assert r is not None
+        if expected_voltage is None:
+            assert r.battery_voltage is None
+        else:
+            assert r.battery_voltage == pytest.approx(expected_voltage)
+        assert r.tx_power == expected_tx_power
+
     def test_invalid_acceleration_sentinel(self):
         payload = _build_payload(accel_x_raw=-32768)
         r = decode_rawv2(payload)

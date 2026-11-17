@@ -67,13 +67,11 @@ def decode_rawv2(data: bytes) -> RuuviReading | None:
     acceleration_y = None if acc_y_raw == -32768 else acc_y_raw / 1000
     acceleration_z = None if acc_z_raw == -32768 else acc_z_raw / 1000
 
-    # Power info: 0xFFFF means both voltage and tx_power invalid
-    if power_raw == 0xFFFF:
-        battery_voltage = None
-        tx_power = None
-    else:
-        battery_voltage = ((power_raw >> 5) + 1600) / 1000
-        tx_power = (power_raw & 0x1F) * 2 - 40
+    # Power info: the 11-bit voltage and 5-bit TX power have independent sentinels.
+    battery_raw = power_raw >> 5
+    tx_power_raw = power_raw & 0x1F
+    battery_voltage = None if battery_raw == 0x7FF else (battery_raw + 1600) / 1000
+    tx_power = None if tx_power_raw == 0x1F else tx_power_raw * 2 - 40
 
     # Movement counter: 0xFF is invalid
     movement_counter = None if move_count == 0xFF else move_count
