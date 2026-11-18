@@ -181,6 +181,7 @@ class TestSettings:
         assert "min_write_interval_seconds" in data
         assert "victoriametrics_url" in data
         assert data["columns_per_row"] == 6
+        assert data["dashboard_title"] == "Ruuvi Dashboard"
 
     async def test_get_settings_includes_dashboard_title(self, client, app_state):
         app_state.dashboard_title = "Home & <Sensors>"

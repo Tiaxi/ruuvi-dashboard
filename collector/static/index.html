@@ -464,8 +464,9 @@ async function toggleTag(mac, enabled) {
 async function loadSettings() {
   const res = await fetch(`${API}/api/settings`);
   const data = await res.json();
-  document.title = data.dashboard_title;
-  document.getElementById('dashboard-title').textContent = data.dashboard_title;
+  const title = data.dashboard_title || 'Ruuvi Dashboard';
+  document.title = title;
+  document.getElementById('dashboard-title').textContent = title;
   document.getElementById('min-interval').value = data.min_write_interval_seconds ?? '';
   document.getElementById('columns-per-row').value = data.columns_per_row ?? '';
   document.getElementById('settings-vm-url').textContent = `VictoriaMetrics: ${data.victoriametrics_url}`;
