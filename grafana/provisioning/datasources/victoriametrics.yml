@@ -1,5 +1,14 @@
 apiVersion: 1
 
+# Existing installs have this datasource with an auto-generated uid, and
+# Grafana refuses to change a provisioned datasource's uid in place ("data
+# source not found", Grafana does not start). Deleting it by name first lets
+# it be recreated with the fixed uid below. Dashboards reference the uid, so
+# recreating it on every start is harmless.
+deleteDatasources:
+  - name: VictoriaMetrics
+    orgId: 1
+
 datasources:
   - name: VictoriaMetrics
     uid: victoriametrics
