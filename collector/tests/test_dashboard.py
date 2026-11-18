@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import yaml
+
 from dashboard import generate_dashboard, write_dashboard
 
 
@@ -11,6 +13,22 @@ class TestGenerateDashboard:
         assert d["uid"] == "ruuvi-sensors"
         assert "panels" in d
         assert d["templating"] == {"list": []}
+
+    def test_queries_use_provisioned_datasource_uid(self):
+        # Shared (public) dashboards need an explicit datasource uid; an empty
+        # one makes Grafana fall back to its built-in random-walk test data.
+        provisioning = (
+            Path(__file__).resolve().parents[2]
+            / "grafana/provisioning/datasources/victoriametrics.yml"
+        )
+        uid = yaml.safe_load(provisioning.read_text())["datasources"][0]["uid"]
+        d = generate_dashboard(["A", "B"])
+        queried = [p for p in d["panels"] if p["type"] != "row"]
+        assert queried
+        for panel in queried:
+            assert panel["datasource"] == {"type": "prometheus", "uid": uid}
+            for target in panel["targets"]:
+                assert target["datasource"] == {"type": "prometheus", "uid": uid}
 
     def test_custom_title(self):
         d = generate_dashboard(["A"], title="My Weather")

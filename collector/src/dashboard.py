@@ -6,6 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+# Must match the uid in grafana/provisioning/datasources/victoriametrics.yml.
+# An empty uid works in the normal dashboard view (the frontend falls back to
+# the default datasource), but externally shared dashboards then query
+# Grafana's built-in test datasource and show random-walk data.
+DATASOURCE: dict[str, str] = {"type": "prometheus", "uid": "victoriametrics"}
+
 
 def _stat_panel(
     panel_id: int,
@@ -36,7 +42,7 @@ def _stat_panel(
         "id": panel_id,
         "title": title,
         "gridPos": {"h": 3, "w": w, "x": x, "y": y},
-        "datasource": {"type": "prometheus", "uid": ""},
+        "datasource": DATASOURCE,
         "fieldConfig": {"defaults": field_defaults, "overrides": []},
         "options": {
             "colorMode": "value",
@@ -45,7 +51,9 @@ def _stat_panel(
             "textMode": "value" if unit == "celsius" else "auto",
             "text": {"valueSize": 32},
         },
-        "targets": [{"expr": expr, "legendFormat": "", "refId": "A"}],
+        "targets": [
+            {"datasource": DATASOURCE, "expr": expr, "legendFormat": "", "refId": "A"}
+        ],
         "timeFrom": "6h",
         "hideTimeOverride": True,
     }
@@ -96,7 +104,7 @@ def _timeseries_panel(
         "id": panel_id,
         "title": title,
         "gridPos": {"h": 8, "w": w, "x": x, "y": y},
-        "datasource": {"type": "prometheus", "uid": ""},
+        "datasource": DATASOURCE,
         "fieldConfig": {"defaults": field_defaults, "overrides": []},
         "options": {
             "legend": {
@@ -108,6 +116,7 @@ def _timeseries_panel(
         },
         "targets": [
             {
+                "datasource": DATASOURCE,
                 "expr": expr,
                 "legendFormat": "{{name}}",
                 "refId": "A",
