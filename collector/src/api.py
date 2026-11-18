@@ -212,6 +212,7 @@ def create_app(state: AppState) -> FastAPI:
             "min_write_interval_seconds": collector.min_write_interval_seconds,
             "victoriametrics_url": collector.victoriametrics_url,
             "columns_per_row": state.config.dashboard.columns_per_row,
+            "dashboard_title": state.dashboard_title,
         }
 
     @app.patch("/api/settings")
