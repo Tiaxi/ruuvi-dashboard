@@ -182,6 +182,11 @@ class TestSettings:
         assert "victoriametrics_url" in data
         assert data["columns_per_row"] == 6
 
+    async def test_get_settings_includes_dashboard_title(self, client, app_state):
+        app_state.dashboard_title = "Home & <Sensors>"
+        resp = await client.get("/api/settings")
+        assert resp.json()["dashboard_title"] == "Home & <Sensors>"
+
     async def test_update_min_interval(self, client, app_state):
         resp = await client.patch(
             "/api/settings", json={"min_write_interval_seconds": 30}

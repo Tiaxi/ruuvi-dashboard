@@ -208,7 +208,7 @@
 <body>
 
 <header>
-  <h1>Ruuvi Dashboard</h1>
+  <h1 id="dashboard-title">Ruuvi Dashboard</h1>
   <div class="header-right">
     <div id="status">Loading...</div>
     <div class="theme-toggle">
@@ -464,6 +464,8 @@ async function toggleTag(mac, enabled) {
 async function loadSettings() {
   const res = await fetch(`${API}/api/settings`);
   const data = await res.json();
+  document.title = data.dashboard_title;
+  document.getElementById('dashboard-title').textContent = data.dashboard_title;
   document.getElementById('min-interval').value = data.min_write_interval_seconds ?? '';
   document.getElementById('columns-per-row').value = data.columns_per_row ?? '';
   document.getElementById('settings-vm-url').textContent = `VictoriaMetrics: ${data.victoriametrics_url}`;
