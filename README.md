@@ -97,6 +97,8 @@ The dashboard is generated automatically from your tag configuration and written
 - **History** graphs — temperature, humidity, and pressure over time
 - **Extra** graphs — battery voltage, RSSI, movement counter, measurements per hour
 
+Every panel queries the provisioned VictoriaMetrics datasource by its fixed uid (`victoriametrics`), so the dashboard also works when shared externally (Grafana's **Share → Share externally**, formerly "public dashboards"). That gives a no-login link that runs only this dashboard's queries, which is a narrower thing to expose than anonymous access to the whole Grafana.
+
 ## Development
 
 ```bash
