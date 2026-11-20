@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
@@ -12,13 +11,13 @@ from typing import Any
 import aiohttp
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from config import (
     AppConfig,
     ConfigWatcher,
     ReadingsStore,
-    TagConfig,
+    normalize_mac,
     save_config,
 )
 from dashboard import write_dashboard
@@ -48,6 +47,15 @@ class TagUpdateRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
 
+    @field_validator("name", "enabled")
+    @classmethod
+    def reject_null(cls, v: object) -> object:
+        """Reject explicit nulls; omit a field to leave it unchanged."""
+        if v is None:
+            msg = "Field must not be null; omit it to leave it unchanged"
+            raise ValueError(msg)
+        return v
+
 
 class SettingsUpdateRequest(BaseModel):
     """Request body for PATCH /api/settings."""
@@ -73,11 +81,25 @@ class TagCreateRequest(BaseModel):
     @classmethod
     def validate_mac(cls, v: str) -> str:
         """Normalize and validate MAC address format."""
-        v = v.upper()
-        if not re.fullmatch(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", v):
-            msg = f"Invalid MAC address: {v}"
-            raise ValueError(msg)
-        return v
+        return normalize_mac(v)
+
+
+def _build_config(state: AppState, **updates: Any) -> AppConfig:  # noqa: ANN401
+    """Validate the current config merged with updates, or raise HTTP 422.
+
+    Updates must be plain data (dicts and lists), so that every tag and
+    setting is validated again instead of being passed through as a model.
+    """
+    data = state.config.model_dump()
+    data.update(updates)
+    try:
+        return AppConfig.model_validate(data)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in err['loc']) or 'config'}: {err['msg']}"
+            for err in exc.errors(include_url=False)
+        )
+        raise HTTPException(422, f"Invalid configuration: {problems}") from exc
 
 
 def _apply_config(state: AppState, new_config: AppConfig) -> None:
@@ -160,13 +182,13 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/tags", status_code=201)
     async def add_tag(body: TagCreateRequest) -> dict[str, Any]:
-        mac = body.mac.upper()
+        mac = body.mac
         if any(t.mac == mac for t in state.config.tags):
             raise HTTPException(409, f"Tag {mac} already configured")
-        new_tag = TagConfig(mac=mac, name=body.name, enabled=body.enabled)
-        new_config = state.config.model_copy(
-            update={"tags": [*state.config.tags, new_tag]}
-        )
+        tags = [t.model_dump() for t in state.config.tags]
+        tags.append({"mac": mac, "name": body.name, "enabled": body.enabled})
+        new_config = _build_config(state, tags=tags)
+        new_tag = new_config.tags[-1]
         _apply_config(state, new_config)
         return {"mac": new_tag.mac, "name": new_tag.name, "enabled": new_tag.enabled}
 
@@ -176,21 +198,20 @@ def create_app(state: AppState) -> FastAPI:
         idx = next((i for i, t in enumerate(state.config.tags) if t.mac == mac), None)
         if idx is None:
             raise HTTPException(404, f"Tag {mac} not found")
-        tag = state.config.tags[idx]
-        updated = tag.model_copy(update=body.model_dump(exclude_unset=True))
-        new_tags = list(state.config.tags)
-        new_tags[idx] = updated
-        new_config = state.config.model_copy(update={"tags": new_tags})
+        tags = [t.model_dump() for t in state.config.tags]
+        tags[idx].update(body.model_dump(exclude_unset=True))
+        new_config = _build_config(state, tags=tags)
+        updated = new_config.tags[idx]
         _apply_config(state, new_config)
         return {"mac": updated.mac, "name": updated.name, "enabled": updated.enabled}
 
     @app.delete("/api/tags/{mac}", status_code=204)
     async def delete_tag(mac: str) -> None:
         mac = mac.upper()
-        new_tags = [t for t in state.config.tags if t.mac != mac]
+        new_tags = [t.model_dump() for t in state.config.tags if t.mac != mac]
         if len(new_tags) == len(state.config.tags):
             raise HTTPException(404, f"Tag {mac} not found")
-        new_config = state.config.model_copy(update={"tags": new_tags})
+        new_config = _build_config(state, tags=new_tags)
         _apply_config(state, new_config)
         await state.readings.remove(mac)
 
@@ -198,10 +219,12 @@ def create_app(state: AppState) -> FastAPI:
     async def reorder_tags(body: TagOrderRequest) -> dict[str, bool]:
         macs = [m.upper() for m in body.macs]
         current = {t.mac: t for t in state.config.tags}
+        if len(macs) != len(set(macs)):
+            raise HTTPException(400, "MAC list must not contain duplicates")
         if set(macs) != set(current):
             raise HTTPException(400, "MAC list must contain exactly the current tags")
-        new_tags = [current[mac] for mac in macs]
-        new_config = state.config.model_copy(update={"tags": new_tags})
+        new_tags = [current[mac].model_dump() for mac in macs]
+        new_config = _build_config(state, tags=new_tags)
         _apply_config(state, new_config)
         return {"ok": True}
 
@@ -217,19 +240,16 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.patch("/api/settings")
     async def update_settings(body: SettingsUpdateRequest) -> dict[str, Any]:
-        updates: dict[str, Any] = {}
-        collector_fields = body.model_dump(
-            exclude_unset=True, exclude={"columns_per_row"}
+        collector_data = state.config.collector.model_dump()
+        collector_data.update(
+            body.model_dump(exclude_unset=True, exclude={"columns_per_row"})
         )
-        if collector_fields:
-            updates["collector"] = state.config.collector.model_copy(
-                update=collector_fields
-            )
+        dashboard_data = state.config.dashboard.model_dump()
         if body.columns_per_row is not None:
-            updates["dashboard"] = state.config.dashboard.model_copy(
-                update={"columns_per_row": body.columns_per_row}
-            )
-        new_config = state.config.model_copy(update=updates)
+            dashboard_data["columns_per_row"] = body.columns_per_row
+        new_config = _build_config(
+            state, collector=collector_data, dashboard=dashboard_data
+        )
         _apply_config(state, new_config)
         collector = new_config.collector
         return {

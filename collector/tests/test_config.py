@@ -4,11 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_reading
+from pydantic import ValidationError
 
 from config import (
     AppConfig,
     CollectorConfig,
     ConfigWatcher,
+    DashboardConfig,
     ReadingsStore,
     TagConfig,
     TagReading,
@@ -26,12 +28,56 @@ class TestTagConfig:
         tag = TagConfig(mac="AA:BB:CC:DD:EE:FF", name="Test")
         assert tag.enabled is True
 
+    @pytest.mark.parametrize(
+        "mac",
+        [
+            "invalid",
+            "AA:BB:CC:DD:EE",
+            "AA-BB-CC-DD-EE-FF",
+            "GG:BB:CC:DD:EE:FF",
+            "AA:BB:CC:DD:EE:\ufb00",
+        ],
+    )
+    def test_invalid_mac_rejected(self, mac):
+        with pytest.raises(ValidationError, match="Invalid MAC address"):
+            TagConfig(mac=mac, name="Test")
+
+    @pytest.mark.parametrize("name", ["Room\nB", "Room\rB", "Tab\there", "a\x00b"])
+    def test_control_characters_in_name_rejected(self, name):
+        with pytest.raises(ValidationError, match="control characters"):
+            TagConfig(mac="AA:BB:CC:DD:EE:FF", name=name)
+
+    @pytest.mark.parametrize("name", ["", "   "])
+    def test_blank_name_rejected(self, name):
+        with pytest.raises(ValidationError, match="must not be empty"):
+            TagConfig(mac="AA:BB:CC:DD:EE:FF", name=name)
+
+    def test_unicode_name_allowed(self):
+        tag = TagConfig(mac="AA:BB:CC:DD:EE:FF", name="Kylpyhuone, Ä = 1 ☀")
+        assert tag.name == "Kylpyhuone, Ä = 1 ☀"
+
+
+class TestDashboardConfig:
+    @pytest.mark.parametrize("columns", [1, 12])
+    def test_columns_bounds_accepted(self, columns):
+        assert DashboardConfig(columns_per_row=columns).columns_per_row == columns
+
+    @pytest.mark.parametrize("columns", [0, -1, 13])
+    def test_columns_out_of_range_rejected(self, columns):
+        with pytest.raises(ValidationError):
+            DashboardConfig(columns_per_row=columns)
+
 
 class TestCollectorConfig:
     def test_defaults(self):
         c = CollectorConfig()
         assert c.victoriametrics_url == "http://victoriametrics:8428"
         assert c.min_write_interval_seconds is None
+
+    @pytest.mark.parametrize("interval", [0, -1])
+    def test_non_positive_interval_rejected(self, interval):
+        with pytest.raises(ValidationError):
+            CollectorConfig(min_write_interval_seconds=interval)
 
 
 class TestAppConfig:
@@ -50,6 +96,17 @@ class TestAppConfig:
     def test_empty_tags(self):
         config = AppConfig(tags=[])
         assert config.enabled_tags_map == {}
+
+    def test_duplicate_macs_rejected_case_insensitively(self):
+        with pytest.raises(ValidationError, match="Duplicate tag MAC"):
+            AppConfig.model_validate(
+                {
+                    "tags": [
+                        {"mac": "AA:BB:CC:DD:EE:FF", "name": "Room A"},
+                        {"mac": "aa:bb:cc:dd:ee:ff", "name": "Room B"},
+                    ]
+                }
+            )
 
 
 class TestLoadConfig:
@@ -84,6 +141,45 @@ class TestLoadConfig:
     def test_load_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):
             load_config("/nonexistent/config.yaml")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "dashboard:\n  columns_per_row: 0\n",
+            "dashboard:\n  columns_per_row: 13\n",
+            "collector:\n  min_write_interval_seconds: -1\n",
+            "collector:\n  min_write_interval_seconds: 0\n",
+            'tags:\n  - mac: "invalid"\n    name: "Room"\n',
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Room\\nB"\n',
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: ""\n',
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: null\n',
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "R"\n    enabled: null\n',
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n'
+            '  - mac: "aa:bb:cc:dd:ee:ff"\n    name: "B"\n',
+        ],
+    )
+    def test_load_invalid_yaml_raises_validation_error(self, tmp_path, text):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(text)
+        with pytest.raises(ValidationError):
+            load_config(str(config_file))
+
+    @pytest.mark.parametrize("text", ["[]\n", "false\n", "0\n", "just text\n"])
+    def test_load_non_mapping_yaml_raises_validation_error(self, tmp_path, text):
+        """A non-mapping root must not silently load an empty default config."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(text)
+        with pytest.raises(ValidationError):
+            load_config(str(config_file))
+
+    def test_startup_with_invalid_yaml_fails_with_validation_error(self, tmp_path):
+        """Startup stops at config loading, before dashboard generation."""
+        from main import _ensure_config
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("dashboard:\n  columns_per_row: 0\n")
+        with pytest.raises(ValidationError, match="columns_per_row"):
+            _ensure_config(str(config_file))
 
 
 class TestReadingsStore:
@@ -179,6 +275,27 @@ class TestConfigWatcher:
             watcher.stop()
 
         assert len(changes) == 0
+
+    def test_rejected_reload_keeps_last_valid_config(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text('tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n')
+        running = [load_config(str(config_file))]
+        watcher = ConfigWatcher(str(config_file), on_change=running.append)
+        reload = watcher._handle_change  # noqa: SLF001 - what the observer calls
+
+        config_file.write_text("dashboard:\n  columns_per_row: 0\n")
+        reload()
+        config_file.write_text(
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n'
+            '  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "B"\n'
+        )
+        reload()
+        assert len(running) == 1
+        assert running[-1].tags[0].name == "A"
+
+        config_file.write_text('tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "C"\n')
+        reload()
+        assert running[-1].tags[0].name == "C"
 
 
 class TestSaveConfig:

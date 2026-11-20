@@ -4,19 +4,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from decoder import RuuviReading
 
 logger = logging.getLogger(__name__)
+
+
+_MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+
+
+def normalize_mac(value: str) -> str:
+    """Uppercase a MAC address and check it has the XX:XX:XX:XX:XX:XX format."""
+    if not _MAC_PATTERN.fullmatch(value):
+        msg = f"Invalid MAC address: {value!r}"
+        raise ValueError(msg)
+    return value.upper()
 
 
 class TagConfig(BaseModel):
@@ -28,22 +41,34 @@ class TagConfig(BaseModel):
 
     @field_validator("mac")
     @classmethod
-    def uppercase_mac(cls, v: str) -> str:
-        """Normalize MAC address to uppercase."""
-        return v.upper()
+    def validate_mac(cls, v: str) -> str:
+        """Normalize MAC address to uppercase and validate its format."""
+        return normalize_mac(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Reject blank names and control characters such as newlines."""
+        if not v.strip():
+            msg = "Tag name must not be empty"
+            raise ValueError(msg)
+        if any(unicodedata.category(ch) == "Cc" for ch in v):
+            msg = "Tag name must not contain control characters"
+            raise ValueError(msg)
+        return v
 
 
 class DashboardConfig(BaseModel):
     """Dashboard layout settings."""
 
-    columns_per_row: int = 6
+    columns_per_row: int = Field(default=6, ge=1, le=12)
 
 
 class CollectorConfig(BaseModel):
     """Collector-level settings."""
 
     victoriametrics_url: str = "http://victoriametrics:8428"
-    min_write_interval_seconds: int | None = None
+    min_write_interval_seconds: int | None = Field(default=None, ge=1)
 
 
 class AppConfig(BaseModel):
@@ -52,6 +77,20 @@ class AppConfig(BaseModel):
     tags: list[TagConfig] = []
     collector: CollectorConfig = CollectorConfig()
     dashboard: DashboardConfig = DashboardConfig()
+
+    @model_validator(mode="after")
+    def check_unique_macs(self) -> AppConfig:
+        """Reject configurations that list the same MAC address twice."""
+        seen: set[str] = set()
+        duplicates = []
+        for tag in self.tags:
+            if tag.mac in seen and tag.mac not in duplicates:
+                duplicates.append(tag.mac)
+            seen.add(tag.mac)
+        if duplicates:
+            msg = f"Duplicate tag MAC addresses: {', '.join(duplicates)}"
+            raise ValueError(msg)
+        return self
 
     @property
     def enabled_tags_map(self) -> dict[str, TagConfig]:
@@ -62,7 +101,9 @@ class AppConfig(BaseModel):
 def load_config(path: str) -> AppConfig:
     """Load and validate configuration from a YAML file."""
     text = Path(path).read_text()
-    data = yaml.safe_load(text) or {}
+    data = yaml.safe_load(text)
+    if data is None:
+        data = {}
     return AppConfig.model_validate(data)
 
 
