@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 def _escape_tag_value(v: str) -> str:
-    return v.replace(" ", r"\ ").replace(",", r"\,").replace("=", r"\=")
+    # Escape backslashes first so the escapes added below stay intact; without
+    # this a value ending in "\" escapes the space that separates tags from fields.
+    return (
+        v.replace("\\", "\\\\")
+        .replace(" ", r"\ ")
+        .replace(",", r"\,")
+        .replace("=", r"\=")
+    )
 
 
 def format_line_protocol(
