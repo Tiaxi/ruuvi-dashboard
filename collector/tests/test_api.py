@@ -667,3 +667,48 @@ class TestApplyConfigWriter:
 
         assert writer._url == "http://db-b:8428/write?precision=ns"  # noqa: SLF001
         assert writer._min_interval == 10  # noqa: SLF001
+
+
+class TestApplyConfigQueuedReadings:
+    """Issue #46: admin API tag changes reach readings queued in the writer."""
+
+    MAC = "AA:BB:CC:DD:EE:FF"
+
+    async def _queue_reading(self, app_state):
+        from scanner import RuuviScanner
+
+        writer = MetricsWriter("http://127.0.0.1:9")  # no worker: stays queued
+        app_state.writer = writer
+        app_state.scanner = RuuviScanner(
+            app_state.config, writer=writer, readings=app_state.readings
+        )
+        await app_state.scanner._process_reading(make_reading(), -60)  # noqa: SLF001
+        assert writer.pending_count == 1
+        return writer
+
+    async def test_disabling_tag_drops_queued_reading(self, client, app_state):
+        writer = await self._queue_reading(app_state)
+
+        resp = await client.patch(f"/api/tags/{self.MAC}", json={"enabled": False})
+
+        assert resp.status_code == 200
+        assert writer.pending_count == 0
+        await writer.close()
+
+    async def test_deleting_tag_drops_queued_reading(self, client, app_state):
+        writer = await self._queue_reading(app_state)
+
+        resp = await client.delete(f"/api/tags/{self.MAC}")
+
+        assert resp.status_code == 204
+        assert writer.pending_count == 0
+        await writer.close()
+
+    async def test_renaming_tag_renames_queued_reading(self, client, app_state):
+        writer = await self._queue_reading(app_state)
+
+        resp = await client.patch(f"/api/tags/{self.MAC}", json={"name": "Room Z"})
+
+        assert resp.status_code == 200
+        assert writer._pending[self.MAC][1] == "Room Z"  # noqa: SLF001
+        await writer.close()

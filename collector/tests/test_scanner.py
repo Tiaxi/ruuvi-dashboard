@@ -76,6 +76,46 @@ class TestReadingHandoff:
         await writer.close()
 
 
+class TestConfigChangeReachesWriter:
+    """Issue #46: queued readings followed the tag config at submit time."""
+
+    MAC = "AA:BB:CC:DD:EE:FF"
+
+    async def _queued(self, tags):
+        from writer import MetricsWriter
+
+        writer = MetricsWriter("http://127.0.0.1:9")  # no worker: stays queued
+        scanner = RuuviScanner(
+            AppConfig(tags=tags), writer=writer, readings=ReadingsStore()
+        )
+        await scanner._process_reading(make_reading(mac=self.MAC), -60)  # noqa: SLF001
+        assert writer.pending_count == 1
+        return scanner, writer
+
+    @pytest.mark.parametrize(
+        "new_tags",
+        [
+            pytest.param([TagConfig(mac=MAC, name="Sauna", enabled=False)], id="off"),
+            pytest.param([], id="deleted"),
+        ],
+    )
+    async def test_disabled_or_deleted_tag_drops_queued_reading(self, new_tags):
+        scanner, writer = await self._queued([TagConfig(mac=self.MAC, name="Sauna")])
+
+        scanner.update_config(AppConfig(tags=new_tags))
+
+        assert writer.pending_count == 0
+        await writer.close()
+
+    async def test_renamed_tag_queued_reading_uses_new_name(self):
+        scanner, writer = await self._queued([TagConfig(mac=self.MAC, name="Sauna")])
+
+        scanner.update_config(AppConfig(tags=[TagConfig(mac=self.MAC, name="Spa")]))
+
+        assert writer._pending[self.MAC][1] == "Spa"  # noqa: SLF001
+        await writer.close()
+
+
 class TestDiscoveryBookkeeping:
     def _discoveries(self, caplog) -> list[str]:
         return [

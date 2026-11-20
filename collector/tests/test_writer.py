@@ -283,6 +283,34 @@ class TestWriterWorker:
         await _stop(worker)
         await writer.close()
 
+    async def test_tag_changes_reach_queued_readings(self, backend):
+        """Issue #46: queued readings were sent for disabled or renamed tags."""
+        in_flight, gone, renamed, kept = (f"AA:00:00:00:00:0{i}" for i in range(1, 5))
+        backend.stall()
+        writer = MetricsWriter(backend.base_url)
+        worker = asyncio.create_task(writer.run())
+        writer.submit(_make_reading(mac=in_flight), "InFlight")
+        await backend.wait_for_requests(1)
+        writer.submit(_make_reading(mac=gone), "Gone")
+        writer.submit(_make_reading(mac=renamed), "Old")
+        writer.submit(_make_reading(mac=kept), "Kept")
+
+        writer.update_tag_names({renamed: "New", kept: "Kept"})
+
+        assert writer.pending_count == 2
+        backend.release.set()
+        await backend.wait_for_requests(3)
+        await _idle()
+        names = sorted(body.split(" ", 1)[0] for body in backend.bodies)
+        assert names == [
+            f"ruuvi,mac={in_flight},name=InFlight",  # already taken by the worker
+            f"ruuvi,mac={renamed},name=New",
+            f"ruuvi,mac={kept},name=Kept",
+        ]
+
+        await _stop(worker)
+        await writer.close()
+
     async def test_concurrent_same_mac_writes_send_one_request(self, backend):
         """Issue #13: every write passed the throttle while one was in flight."""
         backend.stall()
