@@ -11,6 +11,7 @@ from api import AppState, create_app
 from config import (
     AppConfig,
     CollectorConfig,
+    ConfigWatcher,
     ReadingsStore,
     TagConfig,
     load_config,
@@ -581,6 +582,71 @@ class TestApplyConfigFailures:
         assert "configuration" in resp.json()["detail"]
         snapshot()
         assert Path(app_state.dashboard_path).read_text() == dashboard_before
+
+
+class TestOutsideEditRace:
+    """An API save never overwrites an outside edit not applied yet (issue #44)."""
+
+    EDITED = 'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Edited"\n'
+
+    @pytest.fixture(autouse=True)
+    def watcher(self, app_state):
+        """Watch the config; tests run the file event handler by hand."""
+
+        def apply(new_config):
+            app_state.config = new_config
+
+        app_state.watcher = ConfigWatcher(app_state.config_path, on_change=apply)
+
+    @pytest.fixture
+    def dashboard_before(self, app_state):
+        write_dashboard(app_state.config.tags, app_state.dashboard_path)
+        return Path(app_state.dashboard_path).read_text()
+
+    def _assert_disk_matches_runtime(self, app_state):
+        assert load_config(app_state.config_path) == app_state.config
+
+    @pytest.mark.parametrize(
+        "first_write", [EDITED, "", " \t\n"], ids=["edit", "empty", "whitespace"]
+    )
+    async def test_save_before_reload_returns_409(
+        self, client, app_state, dashboard_before, first_write
+    ):
+        Path(app_state.config_path).write_text(first_write)
+
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": "API"})
+
+        assert resp.status_code == 409
+        assert Path(app_state.config_path).read_text() == first_write
+        assert Path(app_state.dashboard_path).read_text() == dashboard_before
+        Path(app_state.config_path).write_text(self.EDITED)
+        app_state.watcher._handle_change()  # noqa: SLF001 - the queued file event
+        assert app_state.config.tags[0].name == "Edited"
+        self._assert_disk_matches_runtime(app_state)
+
+        resp = await client.patch(
+            "/api/tags/AA:BB:CC:DD:EE:FF", json={"enabled": False}
+        )
+        assert resp.status_code == 200
+        assert app_state.config.tags[0].model_dump() == {
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Edited",
+            "enabled": False,
+        }
+        self._assert_disk_matches_runtime(app_state)
+
+    async def test_save_over_same_config_edit_stays_in_sync(self, client, app_state):
+        """An edit that changes only the formatting may be saved over."""
+        Path(app_state.config_path).write_text(
+            "# comment\ntags: [{mac: 'aa:bb:cc:dd:ee:ff', name: Room A}]\n"
+        )
+
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": "API"})
+        assert resp.status_code == 200
+        app_state.watcher._handle_change()  # noqa: SLF001 - the queued file event
+
+        assert app_state.config.tags[0].name == "API"
+        self._assert_disk_matches_runtime(app_state)
 
 
 class TestApplyConfigWriter:

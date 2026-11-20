@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from auth import BasicAuthMiddleware
 from config import (
     AppConfig,
+    ConfigConflictError,
     ConfigWatcher,
     ReadingsStore,
     normalize_mac,
@@ -144,6 +145,10 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
     dashboard is written before the config, so any failure leaves the config
     file and runtime state on the previous config. If the config write fails
     after the dashboard was written, the previous dashboard is put back.
+
+    ``new_config`` must be built from ``state.config`` with no await in
+    between. If the file holds an outside edit not applied yet, nothing is
+    saved and the request fails with 409.
     """
     if state.dashboard_path:
         dashboard_text = _render_dashboard(state, new_config)
@@ -155,8 +160,8 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
             ) from exc
 
     try:
-        save_config(new_config, state.config_path, state.watcher)
-    except OSError as exc:
+        save_config(new_config, state.config_path, state.watcher, base=state.config)
+    except (OSError, ConfigConflictError) as exc:
         if state.dashboard_path:
             try:
                 write_dashboard_text(
@@ -164,6 +169,10 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
                 )
             except OSError:
                 logger.exception("Failed to restore the previous dashboard")
+        if isinstance(exc, ConfigConflictError):
+            raise HTTPException(
+                409, f"{exc}; reload and try again once it is applied"
+            ) from exc
         raise HTTPException(500, f"Could not save the configuration: {exc}") from exc
 
     state.config = new_config

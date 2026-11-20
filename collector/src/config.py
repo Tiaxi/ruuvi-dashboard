@@ -120,20 +120,42 @@ def dump_config(config: AppConfig) -> str:
     return yaml.dump(data, default_flow_style=False, sort_keys=False)
 
 
+class ConfigConflictError(Exception):
+    """The config file holds a valid config other than the one a save expected."""
+
+
 def save_config(
-    config: AppConfig, path: str, watcher: ConfigWatcher | None = None
+    config: AppConfig,
+    path: str,
+    watcher: ConfigWatcher | None = None,
+    *,
+    base: AppConfig | None = None,
 ) -> None:
     """Write configuration to disk atomically.
 
     With a watcher, the write is recorded so the watcher does not reload
     the file we just wrote.
+
+    With ``base``, the config the new one was built from, the save raises
+    ConfigConflictError instead of writing when the file holds a valid config
+    other than ``base``, so an outside edit the app has not applied yet is not
+    overwritten. A missing or invalid file is overwritten; a blank one counts
+    as an empty config, as it does at startup.
     """
     text = dump_config(config)
-    if watcher is None:
+    with watcher.own_write(text) if watcher else contextlib.nullcontext():
+        if base is not None and _read_valid_config(path) not in (None, base):
+            msg = "The config file was changed outside the app"
+            raise ConfigConflictError(msg)
         atomic_write_text(path, text)
-        return
-    with watcher.own_write(text):
-        atomic_write_text(path, text)
+
+
+def _read_valid_config(path: str) -> AppConfig | None:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+        return parse_config(text) if text.strip() else AppConfig()
+    except Exception:  # noqa: BLE001 - as in the watcher, unreadable is no config
+        return None
 
 
 @dataclass
@@ -240,11 +262,23 @@ class ConfigWatcher:
     (our last save, or the last external edit it applied). A file event whose
     current file text matches it is ignored, so our own saves are not
     reloaded, while any other content is reloaded no matter when it appears.
+    A blank file is never applied: it is most likely an edit caught half-way.
+
+    File events are handled through ``dispatch``, called with the handler
+    from the observer thread. By default the handler runs right there; pass
+    ``loop.call_soon_threadsafe`` to handle events on the event loop, in
+    order with everything else that reads or saves the config there.
     """
 
-    def __init__(self, path: str, on_change: Callable[[AppConfig], None]) -> None:
+    def __init__(
+        self,
+        path: str,
+        on_change: Callable[[AppConfig], None],
+        dispatch: Callable[[Callable[[], None]], object] | None = None,
+    ) -> None:
         self._path = path
         self._on_change = on_change
+        self._dispatch = dispatch or (lambda handler: handler())
         self._known_text: str | None = None
         # Held while writing or reading the file and updating _known_text, so
         # an event can never see our new file text before it is recorded.
@@ -285,6 +319,9 @@ class ConfigWatcher:
             if text == self._known_text:
                 logger.debug("Config file unchanged, ignoring event")
                 return
+            if not text.strip():
+                logger.warning("Config file is empty, keeping the running config")
+                return
             try:
                 config = parse_config(text)
             except Exception:
@@ -312,12 +349,12 @@ class _ConfigFileHandler(FileSystemEventHandler):
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if self._is_config_file(event):
-            self._watcher._handle_change()
+            self._watcher._dispatch(self._watcher._handle_change)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if self._is_config_file(event):
-            self._watcher._handle_change()
+            self._watcher._dispatch(self._watcher._handle_change)
 
     def on_moved(self, event: FileSystemEvent) -> None:
         if self._is_config_file(event):
-            self._watcher._handle_change()
+            self._watcher._dispatch(self._watcher._handle_change)

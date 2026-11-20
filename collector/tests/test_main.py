@@ -25,7 +25,7 @@ class FakeServer(uvicorn.Server):
 class FakeWatcher:
     instances = []
 
-    def __init__(self, config_path, on_change):
+    def __init__(self, config_path, on_change, dispatch=None):
         self.started = False
         self.stopped = False
         FakeWatcher.instances.append(self)
