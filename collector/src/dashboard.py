@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from config import TagConfig, normalize_mac
 from fileutil import atomic_write_text
 
 # Must match the uid in grafana/provisioning/datasources/victoriametrics.yml.
@@ -85,6 +87,7 @@ def _timeseries_panel(
     legend_calcs: list[str] | None = None,
     thresholds: list[dict[str, Any]] | None = None,
     span_nulls: bool = True,
+    legend_format: str = "{{name}}",
 ) -> dict[str, Any]:
     custom: dict[str, Any] = {
         "drawStyle": "line",
@@ -120,7 +123,7 @@ def _timeseries_panel(
             {
                 "datasource": DATASOURCE,
                 "expr": expr,
-                "legendFormat": "{{name}}",
+                "legendFormat": legend_format,
                 "refId": "A",
                 "interval": interval,
             }
@@ -132,8 +135,19 @@ GRID_W = 24
 DEFAULT_COLUMNS_PER_ROW = 6
 
 
+def _stat_expr(metric: str, mac: str) -> str:
+    """Select one sensor's latest value by its MAC, merged across renames.
+
+    Every write carries both ``mac`` and ``name`` labels, so a renamed sensor
+    has one series per name it has had. ``max by (mac)`` folds them into a
+    single series per MAC, so the panel keeps its history and shows one value.
+    Only the validated MAC is interpolated, never the free-form display name.
+    """
+    return f'max by (mac) (ruuvi_{metric}{{mac="{normalize_mac(mac)}"}})'
+
+
 def _stat_grid(
-    names: list[str],
+    tags: Sequence[TagConfig],
     metric: str,
     unit: str,
     start_id: int,
@@ -151,17 +165,16 @@ def _stat_grid(
     stat_w = GRID_W // columns_per_row
     panels: list[dict[str, Any]] = []
     panel_id = start_id
-    for i, name in enumerate(names):
+    for i, tag in enumerate(tags):
         row = i // columns_per_row
         col = i % columns_per_row
         x = col * stat_w
         y = start_y + row * 3
-        expr = f'ruuvi_{metric}{{name="{name}"}}'
         panels.append(
             _stat_panel(
                 panel_id,
-                name,
-                expr,
+                tag.name,
+                _stat_expr(metric, tag.mac),
                 unit,
                 y,
                 x,
@@ -172,8 +185,8 @@ def _stat_grid(
             )
         )
         panel_id += 1
-    if names:
-        last_row = (len(names) - 1) // columns_per_row
+    if tags:
+        last_row = (len(tags) - 1) // columns_per_row
         next_y = start_y + (last_row + 1) * 3
     else:
         next_y = start_y
@@ -181,11 +194,15 @@ def _stat_grid(
 
 
 def generate_dashboard(
-    tag_names: list[str],
+    tags: Sequence[TagConfig],
     title: str = "Ruuvi Dashboard",
     columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> dict[str, Any]:
-    """Build a complete Grafana dashboard dict from tag names."""
+    """Build a complete Grafana dashboard dict from the configured tags."""
+    names = [tag.name for tag in tags]
+    # History panels show every sensor in one graph, labelled by name. Add the
+    # MAC to the label only when names are ambiguous, to keep legends short.
+    legend = "{{name}} ({{mac}})" if len(set(names)) < len(names) else "{{name}}"
     panels: list[dict[str, Any]] = []
     panel_id = 1
     y = 0
@@ -196,7 +213,7 @@ def generate_dashboard(
     y += 1
 
     temp_panels, panel_id, y = _stat_grid(
-        tag_names,
+        tags,
         "temperature",
         "celsius",
         panel_id,
@@ -215,7 +232,7 @@ def generate_dashboard(
     y += 1
 
     hum_panels, panel_id, y = _stat_grid(
-        tag_names,
+        tags,
         "humidity",
         "percent",
         panel_id,
@@ -232,19 +249,35 @@ def generate_dashboard(
     y += 1
 
     panels.append(
-        _timeseries_panel(panel_id, "Temperature", "ruuvi_temperature", "celsius", y)
+        _timeseries_panel(
+            panel_id,
+            "Temperature",
+            "ruuvi_temperature",
+            "celsius",
+            y,
+            legend_format=legend,
+        )
     )
     panel_id += 1
     y += 8
 
     panels.append(
-        _timeseries_panel(panel_id, "Humidity", "ruuvi_humidity", "percent", y)
+        _timeseries_panel(
+            panel_id, "Humidity", "ruuvi_humidity", "percent", y, legend_format=legend
+        )
     )
     panel_id += 1
     y += 8
 
     panels.append(
-        _timeseries_panel(panel_id, "Pressure", "ruuvi_pressure", "pressurehpa", y)
+        _timeseries_panel(
+            panel_id,
+            "Pressure",
+            "ruuvi_pressure",
+            "pressurehpa",
+            y,
+            legend_format=legend,
+        )
     )
     panel_id += 1
     y += 8
@@ -263,6 +296,7 @@ def generate_dashboard(
             y,
             w=12,
             legend_calcs=["lastNotNull"],
+            legend_format=legend,
             thresholds=[
                 {"color": "red", "value": None},
                 {"color": "yellow", "value": 2.5},
@@ -282,6 +316,7 @@ def generate_dashboard(
             w=12,
             x=12,
             legend_calcs=["mean"],
+            legend_format=legend,
         )
     )
     panel_id += 1
@@ -296,6 +331,7 @@ def generate_dashboard(
             y,
             w=12,
             legend_calcs=["lastNotNull"],
+            legend_format=legend,
         )
     )
     panel_id += 1
@@ -312,6 +348,7 @@ def generate_dashboard(
             interval="1h",
             legend_calcs=["mean"],
             span_nulls=False,
+            legend_format=legend,
         )
     )
 
@@ -332,12 +369,12 @@ def generate_dashboard(
 
 
 def render_dashboard(
-    tag_names: list[str],
+    tags: Sequence[TagConfig],
     title: str = "Ruuvi Dashboard",
     columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> str:
     """Generate the Grafana dashboard as JSON text."""
-    dashboard = generate_dashboard(tag_names, title, columns_per_row)
+    dashboard = generate_dashboard(tags, title, columns_per_row)
     return json.dumps(dashboard, indent=2, ensure_ascii=False)
 
 
@@ -348,10 +385,10 @@ def write_dashboard_text(text: str, path: str) -> None:
 
 
 def write_dashboard(
-    tag_names: list[str],
+    tags: Sequence[TagConfig],
     path: str,
     title: str = "Ruuvi Dashboard",
     columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> None:
     """Generate and write the Grafana dashboard JSON to disk."""
-    write_dashboard_text(render_dashboard(tag_names, title, columns_per_row), path)
+    write_dashboard_text(render_dashboard(tags, title, columns_per_row), path)

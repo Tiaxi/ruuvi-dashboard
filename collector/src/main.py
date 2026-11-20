@@ -82,7 +82,7 @@ async def run() -> int:
     )
 
     write_dashboard(
-        [t.name for t in config.tags],
+        config.tags,
         dashboard_path,
         dashboard_title,
         config.dashboard.columns_per_row,
@@ -95,7 +95,7 @@ async def run() -> int:
             writer.update_url(new_config.collector.victoriametrics_url)
             app_state.config = new_config
             write_dashboard(
-                [t.name for t in new_config.tags],
+                new_config.tags,
                 dashboard_path,
                 dashboard_title,
                 new_config.dashboard.columns_per_row,

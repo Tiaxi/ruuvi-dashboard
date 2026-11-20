@@ -178,7 +178,7 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
 
 def _render_dashboard(state: AppState, config: AppConfig) -> str:
     return render_dashboard(
-        [t.name for t in config.tags],
+        config.tags,
         state.dashboard_title,
         config.dashboard.columns_per_row,
     )
