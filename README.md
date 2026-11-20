@@ -133,6 +133,34 @@ services:
       - "127.0.0.1:8428:8428"
 ```
 
+### Pinned versions
+
+Every image is pinned to a release tag, so a version change only comes with a
+reviewed commit. Rebuilding the collector can still pick up Debian security
+updates (in the base image and the `bluez` package), but not a new Python, uv,
+Grafana or VictoriaMetrics release:
+
+| Component | Pinned in | Version |
+| --- | --- | --- |
+| Grafana | `docker-compose.yml` | `grafana/grafana:13.3.1` |
+| VictoriaMetrics | `docker-compose.yml` | `victoriametrics/victoria-metrics:v1.156.0` |
+| Python (collector base) | `collector/Dockerfile` | `python:3.14.10-slim-bookworm` |
+| uv (collector build) | `collector/Dockerfile` | `ghcr.io/astral-sh/uv:0.13.9` |
+
+Python packages are pinned by `collector/uv.lock`. Dependabot
+(`.github/dependabot.yml`) opens a pull request each week when a newer image
+tag or GitHub Action is out. To upgrade by hand, or to test such a pull request:
+
+1. Change the tag in the file above and update this table, in a reviewed commit.
+   Read the release notes first; a new Grafana major can change provisioning.
+2. Pull and rebuild: `docker compose pull && docker compose up -d --build`.
+3. Check that `docker compose logs grafana` shows no provisioning errors, that
+   the Ruuvi dashboard loads with data, and that the admin UI shows readings.
+
+To roll back, revert the commit and run step 2 again. Downgrading Grafana or
+VictoriaMetrics across a major version may not read data the newer one wrote,
+so back up the `grafana_data` and `vmdata` volumes before a major upgrade.
+
 ### Tag Config (`config/config.yaml`)
 
 ```yaml
@@ -185,7 +213,7 @@ Every panel queries the provisioned VictoriaMetrics datasource by its fixed uid 
 
 ```bash
 cd collector
-uv sync --dev
+uv sync --locked --dev
 uv run pytest -v
 uv run ruff check src/ tests/
 ```
