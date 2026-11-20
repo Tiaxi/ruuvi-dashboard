@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from auth import BasicAuthMiddleware
 from config import (
     AppConfig,
     ConfigWatcher,
@@ -129,9 +130,17 @@ def _serialize_reading(reading: RuuviReading) -> dict[str, Any]:
     }
 
 
-def create_app(state: AppState) -> FastAPI:
-    """Create the FastAPI application with all admin routes."""
+def create_app(state: AppState, *, admin_password: str) -> FastAPI:
+    """Create the FastAPI application with all admin routes.
+
+    Everything it serves, the admin UI included, requires HTTP Basic auth
+    with ``admin_password``, except ``GET /api/health``.
+    """
+    if not admin_password:
+        msg = "Admin password must not be empty"
+        raise ValueError(msg)
     app = FastAPI(title="Ruuvi Admin")
+    app.add_middleware(BasicAuthMiddleware, password=admin_password)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:

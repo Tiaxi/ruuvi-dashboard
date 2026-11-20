@@ -40,7 +40,10 @@ cp config/config.yaml.example config/config.yaml
 
 docker compose up -d --build
 
-# Open the admin UI at http://<host>:8000
+# Open the admin UI at http://<host>:8000 and log in as "admin". Unless
+# ADMIN_PASSWORD is set in .env, the collector generates a password a few
+# seconds after it starts; once `docker compose logs collector` mentions it:
+sudo cat config/admin_password
 # Open Grafana at http://<host>:3000 (sign in as admin with GF_ADMIN_PASSWORD)
 ```
 
@@ -64,6 +67,7 @@ Add tags via the admin UI — they appear in the dashboard within 30 seconds.
 | `GRAFANA_ENFORCE_DOMAIN` | `false` | Redirect requests for any other hostname to `GRAFANA_DOMAIN`; set `true` for HTTPS/reverse proxy |
 | `GRAFANA_COOKIE_SECURE` | `false` | Send the Grafana login cookie over HTTPS only; set `true` for HTTPS/reverse proxy |
 | `ADMIN_PORT` | `8000` | Host port for the admin UI |
+| `ADMIN_PASSWORD` | *(empty)* | Admin UI password for user `admin`; if empty, a random one is generated into `config/admin_password` |
 | `GRAFANA_PORT` | `3000` | Host port for Grafana |
 | `VM_RETENTION` | `1y` | VictoriaMetrics data retention period |
 
@@ -157,6 +161,15 @@ The collector serves a web UI on port 8000 (configurable via `ADMIN_PORT`):
 - **Discovered Tags** — unconfigured tags detected nearby, with one-click add
 - **Database** — VictoriaMetrics storage statistics
 - **Settings** — write interval and dashboard layout (panels per row)
+
+### Admin login
+
+The admin UI and every `/api/*` route require HTTP Basic auth; only `GET /api/health` is open, for health checks. The user name is `admin`. The password is:
+
+- `ADMIN_PASSWORD` from `.env`, if set. Put it in single quotes, e.g. `ADMIN_PASSWORD='my pa$$word'`, so Compose does not expand `$` in it, and run `docker compose up -d` after changing it. Otherwise:
+- a random password generated on first start and saved to `config/admin_password`. The container writes it as root with mode 0600, so read it with `sudo cat config/admin_password`. The collector log says where it is but never prints the password. Edit the file to choose your own password, or delete it to generate a new one, then `docker compose restart collector`.
+
+Basic auth over plain HTTP is only as private as your LAN: anyone who can watch the traffic can read the password. If the admin UI is reachable from anywhere wider, put it behind a reverse proxy that serves HTTPS.
 
 ## Grafana Dashboard
 

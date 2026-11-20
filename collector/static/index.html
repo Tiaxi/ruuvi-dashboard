@@ -269,7 +269,10 @@
 <div id="toast" class="toast"></div>
 
 <script>
-const API = '';
+// Absolute origin, so fetch works even when the page was opened through a
+// URL with credentials in it (http://admin:pw@host/), where relative URLs
+// would inherit the credentials and fetch would refuse them.
+const API = location.origin;
 let refreshTimer;
 
 // Theme

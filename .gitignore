@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 config/config.yaml
+config/admin_password
 .env
 .claude/
 /.codex
