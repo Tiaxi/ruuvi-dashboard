@@ -2,12 +2,14 @@ import textwrap
 import time
 
 import pytest
-from conftest import failing, make_reading
+from conftest import FakeClock, failing, mac_for, make_reading
 from pydantic import ValidationError
 
 import config as config_module
 import fileutil
 from config import (
+    DISCOVERY_TTL_SECONDS,
+    MAX_DISCOVERED_TAGS,
     AppConfig,
     CollectorConfig,
     ConfigWatcher,
@@ -241,6 +243,93 @@ class TestReadingsStore:
     async def test_remove_missing_is_noop(self):
         store = ReadingsStore()
         await store.remove("FF:FF:FF:FF:FF:FF")
+
+
+CONFIGURED = "AA:BB:CC:DD:EE:FF"
+STRANGER = "11:22:33:44:55:66"
+
+
+class TestDiscoveryPruning:
+    async def _seen(self, store, mac, keep=(CONFIGURED,)):
+        return await store.update(mac, make_reading(mac=mac), rssi=-70, keep=keep)
+
+    async def test_update_reports_first_sighting_only(self):
+        store = ReadingsStore(clock=FakeClock())
+        assert await self._seen(store, STRANGER) is True
+        assert await self._seen(store, STRANGER) is False
+
+    async def test_unconfigured_reading_expires_after_ttl(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        await self._seen(store, STRANGER)
+
+        clock.now += DISCOVERY_TTL_SECONDS
+        await store.prune(keep={CONFIGURED})
+        assert STRANGER in await store.get_all()
+
+        clock.now += 1
+        await store.prune(keep={CONFIGURED})
+        assert STRANGER not in await store.get_all()
+
+    async def test_update_sweeps_expired_readings(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        await self._seen(store, STRANGER)
+        clock.now += DISCOVERY_TTL_SECONDS + 1
+        await self._seen(store, mac_for(1))
+        assert set(await store.get_all()) == {mac_for(1)}
+
+    async def test_returning_tag_is_rediscovered_before_sweep(self):
+        """A tag back after the TTL counts as new even if not swept yet."""
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        await self._seen(store, STRANGER)
+        clock.now += DISCOVERY_TTL_SECONDS + 1
+        assert await self._seen(store, STRANGER) is True
+
+    async def test_configured_reading_never_expires(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        await self._seen(store, CONFIGURED)
+        clock.now += 100 * DISCOVERY_TTL_SECONDS
+        await store.prune(keep={CONFIGURED})
+        await self._seen(store, STRANGER)
+        assert CONFIGURED in await store.get_all()
+
+    async def test_cap_keeps_most_recently_seen(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        await self._seen(store, CONFIGURED)
+        total = MAX_DISCOVERED_TAGS + 50
+        for i in range(total):
+            clock.now += 1
+            await self._seen(store, mac_for(i))
+            if i == MAX_DISCOVERED_TAGS - 1:
+                await self._seen(store, mac_for(0))  # seen again, so kept
+
+        stored = set(await store.get_all())
+        assert len(stored) == MAX_DISCOVERED_TAGS + 1
+        assert CONFIGURED in stored
+        assert stored - {CONFIGURED} == {mac_for(0)} | {
+            mac_for(i) for i in range(51, total)
+        }
+
+    async def test_prune_applies_cap_after_tag_is_unconfigured(self):
+        store = ReadingsStore(clock=FakeClock())
+        await self._seen(store, CONFIGURED)
+        for i in range(MAX_DISCOVERED_TAGS):
+            await self._seen(store, mac_for(i))
+        await store.prune(keep=())
+        assert len(await store.get_all()) == MAX_DISCOVERED_TAGS
+
+    async def test_capped_out_tag_is_rediscovered(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        for i in range(MAX_DISCOVERED_TAGS + 1):
+            clock.now += 1
+            await self._seen(store, mac_for(i))
+        assert mac_for(0) not in await store.get_all()
+        assert await self._seen(store, mac_for(0)) is True
 
 
 class TestConfigWatcher:

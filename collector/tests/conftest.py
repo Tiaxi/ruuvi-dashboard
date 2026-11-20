@@ -26,3 +26,18 @@ def failing(exc: BaseException):
         raise exc
 
     return fail
+
+
+class FakeClock:
+    """A settable stand-in for ``time.time``."""
+
+    def __init__(self, now: float = 1_000_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def mac_for(i: int) -> str:
+    """Return a distinct MAC address for index ``i``."""
+    return "10:00:00:00:{:02X}:{:02X}".format(*divmod(i, 256))

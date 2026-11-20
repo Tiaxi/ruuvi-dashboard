@@ -39,7 +39,6 @@ class RuuviScanner:
         self._writer = writer
         self._readings = readings
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._seen_macs: set[str] = set()
         self._tasks: set[asyncio.Future[None]] = set()
         self.status = ScannerStatus.STARTING
 
@@ -75,10 +74,8 @@ class RuuviScanner:
         task.add_done_callback(self._tasks.discard)
 
     async def _process_reading(self, reading: RuuviReading, rssi: int) -> None:
-        await self._readings.update(reading.mac, reading, rssi)
-
-        if reading.mac not in self._seen_macs:
-            self._seen_macs.add(reading.mac)
+        configured = {t.mac for t in self._config.tags}
+        if await self._readings.update(reading.mac, reading, rssi, keep=configured):
             logger.info(
                 "Discovered Ruuvi tag %s (%.1f\u00b0C, %.0f%% RH, %.2fV, RSSI %d dBm)",
                 reading.mac,
