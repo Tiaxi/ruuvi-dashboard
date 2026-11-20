@@ -1,6 +1,10 @@
-FROM python:3.14-slim-bookworm
+# Pinned versions; see "Pinned versions" in the README for how to upgrade.
+# The uv image is a named stage so Dependabot sees it as a normal FROM line.
+FROM ghcr.io/astral-sh/uv:0.13.9 AS uv
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+FROM python:3.14.10-slim-bookworm
+
+COPY --from=uv /uv /usr/local/bin/uv
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bluez \

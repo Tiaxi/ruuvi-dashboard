@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Grafana and VictoriaMetrics in docker-compose.yml
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+  # Python base and uv images in collector/Dockerfile
+  - package-ecosystem: docker
+    directory: /collector
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
