@@ -29,6 +29,37 @@ from writer import MetricsWriter
 
 logger = logging.getLogger(__name__)
 
+# Each VictoriaMetrics request made for /api/db-stats gives up after this long,
+# so a slow or unreachable database cannot pile up requests from the admin UI.
+DB_STATS_TIMEOUT_SECONDS = 3.0
+
+
+def _storage_stats(metrics_text: str) -> dict[str, int]:
+    """Read storage stats from VictoriaMetrics /metrics output.
+
+    Returns an empty dict when the text has no VictoriaMetrics storage metrics,
+    so another service answering on the configured URL does not read as zeros.
+    """
+    metrics: dict[str, str] = {}
+    for line in metrics_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not line.startswith("#"):
+            metrics[parts[0]] = parts[1]
+    if not any(name.startswith("vm_rows{") for name in metrics):
+        return {}
+
+    def value(name: str) -> int:
+        return int(float(metrics.get(name, "0")))
+
+    def total(name: str) -> int:
+        return sum(value(f'{name}{{type="storage/{t}"}}') for t in ("big", "small"))
+
+    return {
+        "total_datapoints": total("vm_rows"),
+        "storage_bytes": total("vm_data_size_bytes"),
+        "active_time_series": value('vm_cache_entries{type="storage/metricName"}'),
+    }
+
 
 @dataclass
 class AppState:
@@ -303,63 +334,35 @@ def create_app(state: AppState, *, admin_password: str) -> FastAPI:
     async def db_stats() -> dict[str, Any]:
         vm_url = state.config.collector.victoriametrics_url
         result: dict[str, Any] = {}
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=DB_STATS_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
                 async with session.get(f"{vm_url}/metrics") as resp:
                     if resp.status == 200:
-                        text = await resp.text()
-                        metrics: dict[str, str] = {}
-                        for line in text.splitlines():
-                            if line.startswith("#"):
-                                continue
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                metrics[parts[0]] = parts[1]
-                        rows_big = int(
-                            float(metrics.get('vm_rows{type="storage/big"}', "0"))
-                        )
-                        rows_small = int(
-                            float(metrics.get('vm_rows{type="storage/small"}', "0"))
-                        )
-                        result["total_datapoints"] = rows_big + rows_small
-                        size_big = int(
-                            float(
-                                metrics.get(
-                                    'vm_data_size_bytes{type="storage/big"}',
-                                    "0",
-                                )
-                            )
-                        )
-                        size_small = int(
-                            float(
-                                metrics.get(
-                                    'vm_data_size_bytes{type="storage/small"}',
-                                    "0",
-                                )
-                            )
-                        )
-                        result["storage_bytes"] = size_big + size_small
-                        result["active_time_series"] = int(
-                            float(
-                                metrics.get(
-                                    'vm_cache_entries{type="storage/metricName"}',
-                                    "0",
-                                )
-                            )
-                        )
-            except aiohttp.ClientError:
+                        result.update(_storage_stats(await resp.text()))
+            except aiohttp.ClientError, TimeoutError, ValueError:
                 pass
             try:
                 async with session.get(f"{vm_url}/api/v1/status/tsdb") as resp:
                     if resp.status == 200:
                         data = (await resp.json()).get("data", {})
-                        result["total_series"] = data.get("totalSeries", 0)
-                        result["series_by_metric"] = [
-                            {"name": s["name"], "count": s["value"]}
-                            for s in data.get("seriesCountByMetricName", [])
-                        ]
-            except aiohttp.ClientError:
+                        if "totalSeries" in data:
+                            result["total_series"] = data["totalSeries"]
+                            result["series_by_metric"] = [
+                                {"name": s["name"], "count": s["value"]}
+                                for s in data.get("seriesCountByMetricName", [])
+                            ]
+            except (
+                aiohttp.ClientError,
+                TimeoutError,
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+            ):
                 pass
+        if not result:
+            raise HTTPException(503, "VictoriaMetrics statistics are unavailable")
         return result
 
     static_dir = Path(__file__).parent.parent / "static"
