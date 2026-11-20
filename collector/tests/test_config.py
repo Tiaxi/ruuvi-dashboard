@@ -481,6 +481,48 @@ class TestConfigWatcher:
         reload()
         assert running[-1].tags[0].name == "C"
 
+    @pytest.mark.parametrize("blank", ["", "  \n\n"])
+    def test_blank_file_is_not_applied(self, tmp_path, blank):
+        """An edit caught half-written keeps the running config (issue #43)."""
+        full = 'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n'
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(full)
+        changes = []
+        watcher = ConfigWatcher(str(config_file), on_change=changes.append)
+        reload = watcher._handle_change  # noqa: SLF001 - what the observer calls
+
+        config_file.write_text(blank)
+        reload()
+        assert changes == []
+
+        config_file.write_text(full.replace('"A"', '"B"'))
+        reload()
+        assert _tag_names(changes) == ["B"]
+
+    def test_events_go_through_dispatch(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("tags: []\n")
+        changes, dispatched = [], []
+        watcher = ConfigWatcher(
+            str(config_file), on_change=changes.append, dispatch=dispatched.append
+        )
+        watcher.start()
+        try:
+            time.sleep(0.5)
+            config_file.write_text(
+                'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Test"\n'
+            )
+            for _ in range(40):
+                if dispatched:
+                    break
+                time.sleep(0.1)
+        finally:
+            watcher.stop()
+
+        assert changes == []
+        dispatched[0]()
+        assert _tag_names(changes) == ["Test"]
+
 
 class TestSaveConfig:
     def test_save_and_reload_roundtrip(self, tmp_path):

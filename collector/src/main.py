@@ -89,22 +89,23 @@ async def run() -> int:
     )
 
     def on_config_change(new_config: AppConfig) -> None:
-        def apply() -> None:
-            scanner.update_config(new_config)
-            writer.update_min_interval(new_config.collector.min_write_interval_seconds)
-            writer.update_url(new_config.collector.victoriametrics_url)
-            app_state.config = new_config
-            write_dashboard(
-                new_config.tags,
-                dashboard_path,
-                dashboard_title,
-                new_config.dashboard.columns_per_row,
-            )
-            logger.info("Applied config change, dashboard regenerated")
+        scanner.update_config(new_config)
+        writer.update_min_interval(new_config.collector.min_write_interval_seconds)
+        writer.update_url(new_config.collector.victoriametrics_url)
+        app_state.config = new_config
+        write_dashboard(
+            new_config.tags,
+            dashboard_path,
+            dashboard_title,
+            new_config.dashboard.columns_per_row,
+        )
+        logger.info("Applied config change, dashboard regenerated")
 
-        loop.call_soon_threadsafe(apply)
-
-    watcher = ConfigWatcher(config_path, on_change=on_config_change)
+    # File events are handled on the event loop, so a reload and an admin API
+    # save never interleave: a save always builds on the running config.
+    watcher = ConfigWatcher(
+        config_path, on_change=on_config_change, dispatch=loop.call_soon_threadsafe
+    )
     app_state.watcher = watcher
 
     admin_password = resolve_admin_password(
