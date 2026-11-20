@@ -375,6 +375,138 @@ class TestReorderTags:
         assert temp_stats[1]["title"] == "Room A"
 
 
+import asyncio
+
+from aiohttp import web
+
+METRICS_TEXT = """\
+# HELP vm_rows rows
+flag{name="retentionPeriod", value="1y"} 1
+vm_rows{type="storage/big"} 10
+vm_rows{type="storage/small"} 5
+vm_data_size_bytes{type="storage/big"} 2048
+vm_data_size_bytes{type="storage/small"} 1024
+vm_cache_entries{type="storage/metricName"} 3
+"""
+
+
+@pytest.fixture
+async def fake_vm(app_state):
+    """Serve a fake VictoriaMetrics on 127.0.0.1 whose behaviour tests choose."""
+    handlers = {}
+    release = asyncio.Event()
+
+    async def hang(_):
+        await release.wait()
+        return web.Response(text="")
+
+    handlers["hang"] = hang
+
+    async def dispatch(request):
+        return await handlers[request.path](request)
+
+    vm_app = web.Application()
+    vm_app.router.add_get("/{tail:.*}", dispatch)
+    runner = web.AppRunner(vm_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    app_state.config.collector.victoriametrics_url = f"http://127.0.0.1:{port}"
+    yield handlers
+    release.set()
+    await runner.cleanup()
+
+
+class TestDbStats:
+    async def test_returns_stats(self, client, fake_vm):
+        async def metrics(_):
+            return web.Response(text=METRICS_TEXT)
+
+        async def tsdb(_):
+            return web.json_response(
+                {
+                    "data": {
+                        "totalSeries": 7,
+                        "seriesCountByMetricName": [{"name": "ruuvi", "value": 7}],
+                    }
+                }
+            )
+
+        fake_vm["/metrics"] = metrics
+        fake_vm["/api/v1/status/tsdb"] = tsdb
+        resp = await client.get("/api/db-stats")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "total_datapoints": 15,
+            "storage_bytes": 3072,
+            "active_time_series": 3,
+            "total_series": 7,
+            "series_by_metric": [{"name": "ruuvi", "count": 7}],
+        }
+
+    async def test_hanging_database_times_out_with_503(
+        self, client, fake_vm, monkeypatch
+    ):
+        monkeypatch.setattr(api, "DB_STATS_TIMEOUT_SECONDS", 0.2)
+        fake_vm["/metrics"] = fake_vm["hang"]
+        fake_vm["/api/v1/status/tsdb"] = fake_vm["hang"]
+        async with asyncio.timeout(5):
+            resp = await client.get("/api/db-stats")
+        assert resp.status_code == 503
+        assert resp.json() == {"detail": "VictoriaMetrics statistics are unavailable"}
+
+    async def test_invalid_responses_return_503(self, client, fake_vm):
+        async def bad_metrics(_):
+            return web.Response(text='vm_rows{type="storage/big"} not-a-number')
+
+        async def bad_tsdb(_):
+            return web.Response(text="<html>oops</html>", content_type="text/html")
+
+        fake_vm["/metrics"] = bad_metrics
+        fake_vm["/api/v1/status/tsdb"] = bad_tsdb
+        resp = await client.get("/api/db-stats")
+        assert resp.status_code == 503
+
+    async def test_other_service_on_url_returns_503(self, client, fake_vm):
+        async def html(_):
+            return web.Response(text="<html>hi</html>", content_type="text/html")
+
+        async def empty_json(_):
+            return web.json_response({})
+
+        fake_vm["/metrics"] = html
+        fake_vm["/api/v1/status/tsdb"] = empty_json
+        resp = await client.get("/api/db-stats")
+        assert resp.status_code == 503
+
+    async def test_unexpected_json_shape_returns_503(self, client, fake_vm):
+        async def error(_):
+            return web.Response(status=500)
+
+        async def odd_tsdb(_):
+            return web.json_response(["not", "an", "object"])
+
+        fake_vm["/metrics"] = error
+        fake_vm["/api/v1/status/tsdb"] = odd_tsdb
+        resp = await client.get("/api/db-stats")
+        assert resp.status_code == 503
+
+    async def test_partial_stats_when_one_request_fails(self, client, fake_vm):
+        async def metrics(_):
+            return web.Response(text=METRICS_TEXT)
+
+        async def error(_):
+            return web.Response(status=500)
+
+        fake_vm["/metrics"] = metrics
+        fake_vm["/api/v1/status/tsdb"] = error
+        resp = await client.get("/api/db-stats")
+        assert resp.status_code == 200
+        assert resp.json()["storage_bytes"] == 3072
+        assert "total_series" not in resp.json()
+
+
 class TestStaticFiles:
     async def test_root_serves_html(self, client):
         resp = await client.get("/")

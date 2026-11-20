@@ -258,9 +258,9 @@
     <h2>Settings</h2>
     <div class="settings-form">
       <label for="min-interval">Min write interval (seconds):</label>
-      <input type="number" id="min-interval" min="1" placeholder="None">
+      <input type="number" id="min-interval" min="1" placeholder="None" autocomplete="off">
       <label for="columns-per-row">Panels per row:</label>
-      <input type="number" id="columns-per-row" min="1" max="12" style="width:60px">
+      <input type="number" id="columns-per-row" min="1" max="12" style="width:60px" autocomplete="off">
       <button class="primary" onclick="saveSettings()">Save</button>
       <span id="settings-vm-url" class="vm-url"></span>
     </div>
@@ -310,27 +310,81 @@ function initTheme() {
 initTheme();
 
 // Data
-async function refresh() {
-  // Load independently so the title and settings apply even if other requests fail.
-  loadSettings().catch(() => {});
+// GET a JSON endpoint. Rejects on network errors, HTTP errors, bad JSON and
+// after timeoutMs, so a stuck request cannot block later refreshes forever.
+async function getJson(path, timeoutMs = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const [tagsRes, discoveredRes, healthRes, dbRes] = await Promise.all([
-      fetch(`${API}/api/tags`),
-      fetch(`${API}/api/discovered`),
-      fetch(`${API}/api/health`),
-      fetch(`${API}/api/db-stats`),
-    ]);
-    const tags = await tagsRes.json();
-    const discovered = await discoveredRes.json();
-    const health = await healthRes.json();
-    const dbStats = await dbRes.json();
-    renderTags(tags);
-    renderDiscovered(discovered);
-    renderHealth(health);
-    renderDbStats(dbStats);
-  } catch (e) {
+    const res = await fetch(`${API}${path}`, {signal: ctrl.signal});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Run fn without overlapping calls. tick() skips while a run is in flight
+// (periodic polling); now() queues one more run so a change just made shows up.
+function singleFlight(fn) {
+  let running = false;
+  let again = false;
+  async function run() {
+    running = true;
+    try {
+      do {
+        again = false;
+        try { await fn(); } catch (e) { console.error(e); }
+      } while (again);
+    } finally {
+      running = false;
+    }
+  }
+  return {
+    tick() { if (!running) run(); },
+    now() { if (running) again = true; else run(); },
+  };
+}
+
+// Loaded independently so the title and settings apply even if other requests fail.
+const settingsLoader = singleFlight(loadSettings);
+
+const liveData = singleFlight(async () => {
+  const [tags, discovered, health] = await Promise.allSettled([
+    getJson('/api/tags'),
+    getJson('/api/discovered'),
+    getJson('/api/health'),
+  ]);
+  if (tags.status === 'fulfilled') renderTags(tags.value);
+  if (discovered.status === 'fulfilled') renderDiscovered(discovered.value);
+  if ([tags, discovered, health].every(r => r.status === 'fulfilled')) {
+    renderHealth(health.value);
+  } else {
     document.getElementById('status').textContent = 'Connection error';
   }
+});
+
+// Database statistics load separately so a slow or failing VictoriaMetrics
+// never holds up the live sensor readings.
+const dbStats = singleFlight(async () => {
+  try {
+    renderDbStats(await getJson('/api/db-stats', 10000));
+  } catch (e) {
+    renderDbStatsUnavailable();
+  }
+});
+
+// Periodic poll: skips any part whose previous request is still running.
+function poll() {
+  settingsLoader.tick();
+  liveData.tick();
+  dbStats.tick();
+}
+
+// After a change: reload settings and tags, waiting for any running poll first.
+function refresh() {
+  settingsLoader.now();
+  liveData.now();
 }
 
 function renderHealth(h) {
@@ -360,12 +414,17 @@ function renderDbStats(s) {
   ).join('');
   el.innerHTML = `
     <div class="db-stats-grid">
-      <div class="db-stat-item"><span class="db-stat-label">Storage</span><span class="db-stat-value">${fmtBytes(s.storage_bytes || 0)}</span></div>
+      <div class="db-stat-item"><span class="db-stat-label">Storage</span><span class="db-stat-value">${s.storage_bytes != null ? fmtBytes(s.storage_bytes) : '-'}</span></div>
       <div class="db-stat-item"><span class="db-stat-label">Data points</span><span class="db-stat-value">${fmtNum(s.total_datapoints)}</span></div>
       <div class="db-stat-item"><span class="db-stat-label">Time series</span><span class="db-stat-value">${fmtNum(s.total_series)}</span></div>
     </div>
     ${series ? `<details><summary>Series by metric</summary><table>${series}</table></details>` : ''}
   `;
+}
+
+function renderDbStatsUnavailable() {
+  document.getElementById('db-stats').innerHTML =
+    '<span class="reading-null">Database unavailable: VictoriaMetrics did not answer. Retrying...</span>';
 }
 
 function fmt(val, unit, decimals) {
@@ -425,54 +484,82 @@ function renderDiscovered(tags) {
   `).join('');
 }
 
+// Send a change to the API. On failure tell the user why and return null.
+async function mutate(action, path, options) {
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, options);
+  } catch (e) {
+    alert(`Error: could not ${action}: the collector did not respond. Check the connection and try again.`);
+    return null;
+  }
+  if (res.ok) return res;
+  let detail = `HTTP ${res.status}`;
+  try {
+    const body = await res.json();
+    if (typeof body.detail === 'string') detail = body.detail;
+    else if (Array.isArray(body.detail)) detail = body.detail.map(d => d.msg).join('; ');
+  } catch (e) { /* keep the status code */ }
+  alert(`Error: could not ${action}: ${detail}`);
+  return null;
+}
+
+function jsonRequest(method, body) {
+  return {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+}
+
 async function addTag(mac) {
   const name = prompt(`Name for tag ${mac}:`);
   if (!name) return;
-  const res = await fetch(`${API}/api/tags`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({mac, name}),
-  });
-  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  await mutate(`add tag ${mac}`, '/api/tags', jsonRequest('POST', {mac, name}));
   refresh();
 }
 
 async function editTag(mac) {
   const name = prompt(`New name for ${mac}:`);
   if (!name) return;
-  const res = await fetch(`${API}/api/tags/${mac}`, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name}),
-  });
-  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  await mutate(`rename tag ${mac}`, `/api/tags/${mac}`, jsonRequest('PATCH', {name}));
   refresh();
 }
 
 async function deleteTag(mac) {
   if (!confirm(`Delete tag ${mac}?`)) return;
-  const res = await fetch(`${API}/api/tags/${mac}`, {method: 'DELETE'});
-  if (!res.ok) alert(`Error: ${(await res.json()).detail}`);
+  await mutate(`delete tag ${mac}`, `/api/tags/${mac}`, {method: 'DELETE'});
   refresh();
 }
 
 async function toggleTag(mac, enabled) {
-  await fetch(`${API}/api/tags/${mac}`, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({enabled}),
-  });
+  const action = `${enabled ? 'enable' : 'disable'} tag ${mac}`;
+  await mutate(action, `/api/tags/${mac}`, jsonRequest('PATCH', {enabled}));
   refresh();
 }
 
+// Last value loaded or saved for each editable setting (inputs start empty).
+// A background refresh only replaces an input that still shows that value and
+// is not focused, so an unsaved edit survives polling.
+const settingsBaseline = {'min-interval': '', 'columns-per-row': ''};
+let settingsSaves = 0;
+
+function setSettingInput(id, value) {
+  const el = document.getElementById(id);
+  if (el.value === settingsBaseline[id] && document.activeElement !== el) {
+    el.value = value ?? '';
+    settingsBaseline[id] = el.value;
+  }
+}
+
 async function loadSettings() {
-  const res = await fetch(`${API}/api/settings`);
-  const data = await res.json();
+  const savesBefore = settingsSaves;
+  const data = await getJson('/api/settings');
   const title = data.dashboard_title || 'Ruuvi Dashboard';
   document.title = title;
   document.getElementById('dashboard-title').textContent = title;
-  document.getElementById('min-interval').value = data.min_write_interval_seconds ?? '';
-  document.getElementById('columns-per-row').value = data.columns_per_row ?? '';
+  // A response started before a save may hold the old values; the queued
+  // refresh after the save loads the new ones.
+  if (savesBefore === settingsSaves) {
+    setSettingInput('min-interval', data.min_write_interval_seconds);
+    setSettingInput('columns-per-row', data.columns_per_row);
+  }
   document.getElementById('settings-vm-url').textContent = `VictoriaMetrics: ${data.victoriametrics_url}`;
 }
 
@@ -483,17 +570,13 @@ async function saveSettings() {
   if (interval) body.min_write_interval_seconds = parseInt(interval);
   else body.min_write_interval_seconds = null;
   if (cols) body.columns_per_row = parseInt(cols);
-  const res = await fetch(`${API}/api/settings`, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-  if (res.ok) {
-    showToast('Settings saved');
-    refresh();
-  } else {
-    alert(`Error: ${(await res.json()).detail}`);
-  }
+  if (!await mutate('save settings', '/api/settings', jsonRequest('PATCH', body))) return;
+  // The submitted values become the baseline; edits made since Save stay dirty.
+  settingsSaves++;
+  settingsBaseline['min-interval'] = interval;
+  settingsBaseline['columns-per-row'] = cols;
+  showToast('Settings saved');
+  refresh();
 }
 
 function showToast(msg) {
@@ -547,17 +630,13 @@ async function drop(e) {
   macs.splice(fromIdx, 1);
   macs.splice(toIdx, 0, draggedMac);
 
-  await fetch(`${API}/api/tags/order`, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({macs}),
-  });
+  await mutate('reorder tags', '/api/tags/order', jsonRequest('PUT', {macs}));
   dragEnd(e);
   refresh();
 }
 
-refresh();
-refreshTimer = setInterval(refresh, 5000);
+poll();
+refreshTimer = setInterval(poll, 5000);
 </script>
 </body>
 </html>
