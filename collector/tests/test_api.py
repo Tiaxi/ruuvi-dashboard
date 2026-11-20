@@ -33,6 +33,33 @@ def app_state(tmp_path):
 
 
 @pytest.fixture
+def snapshot(app_state):
+    """Return a check that the config on disk and in memory did not change."""
+    before_config = app_state.config.model_copy(deep=True)
+    before_text = Path(app_state.config_path).read_text()
+
+    def assert_unchanged():
+        assert app_state.config == before_config
+        assert Path(app_state.config_path).read_text() == before_text
+        load_config(app_state.config_path)
+
+    return assert_unchanged
+
+
+@pytest.fixture
+def two_tag_state(app_state):
+    config = AppConfig(
+        tags=[
+            TagConfig(mac="AA:BB:CC:DD:EE:FF", name="Room A"),
+            TagConfig(mac="11:22:33:44:55:66", name="Room B"),
+        ],
+    )
+    save_config(config, app_state.config_path)
+    app_state.config = config
+    return app_state
+
+
+@pytest.fixture
 def client(app_state):
     app = create_app(app_state)
     transport = ASGITransport(app=app)
@@ -128,6 +155,19 @@ class TestPostTag:
         resp = await client.post("/api/tags", json={"mac": "11:22:33:44:55:66"})
         assert resp.status_code == 422
 
+    async def test_add_tag_invalid_mac_returns_422(self, client, snapshot):
+        resp = await client.post("/api/tags", json={"mac": "invalid", "name": "X"})
+        assert resp.status_code == 422
+        snapshot()
+
+    @pytest.mark.parametrize("name", ["Room\nB", "Room\x00B", "", "   "])
+    async def test_add_tag_invalid_name_returns_422(self, client, snapshot, name):
+        resp = await client.post(
+            "/api/tags", json={"mac": "11:22:33:44:55:66", "name": name}
+        )
+        assert resp.status_code == 422
+        snapshot()
+
 
 class TestPatchTag:
     async def test_rename(self, client, app_state):
@@ -155,6 +195,19 @@ class TestPatchTag:
     async def test_case_insensitive_mac(self, client):
         resp = await client.patch("/api/tags/aa:bb:cc:dd:ee:ff", json={"name": "X"})
         assert resp.status_code == 200
+
+    @pytest.mark.parametrize("body", [{"name": None}, {"enabled": None}])
+    async def test_explicit_null_returns_422(self, client, snapshot, body):
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json=body)
+        assert resp.status_code == 422
+        snapshot()
+
+    @pytest.mark.parametrize("name", ["Room\nB", "Tab\there", "", "   "])
+    async def test_invalid_name_returns_422(self, client, snapshot, name):
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": name})
+        assert resp.status_code == 422
+        assert "name" in resp.json()["detail"]
+        snapshot()
 
 
 class TestDeleteTag:
@@ -230,6 +283,56 @@ class TestReorderTags:
     async def test_reorder_missing_mac_returns_400(self, client):
         resp = await client.put("/api/tags/order", json={"macs": ["FF:FF:FF:FF:FF:FF"]})
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        "macs",
+        [
+            ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "11:22:33:44:55:66"],
+            ["aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"],
+            ["AA:BB:CC:DD:EE:FF"],
+            ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "FF:FF:FF:FF:FF:FF"],
+            [],
+        ],
+        ids=[
+            "duplicate",
+            "duplicate-case",
+            "missing",
+            "extra",
+            "empty",
+        ],
+    )
+    async def test_reorder_invalid_list_returns_400(self, client, two_tag_state, macs):
+        before_config = two_tag_state.config.model_copy(deep=True)
+        before_text = Path(two_tag_state.config_path).read_text()
+        resp = await client.put("/api/tags/order", json={"macs": macs})
+        assert resp.status_code == 400
+        assert two_tag_state.config == before_config
+        assert Path(two_tag_state.config_path).read_text() == before_text
+
+    @pytest.mark.parametrize(
+        "macs",
+        [
+            ["AA:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:FF"],
+            ["AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee:ff"],
+        ],
+    )
+    async def test_reorder_duplicate_of_only_tag_returns_400(
+        self, client, snapshot, macs
+    ):
+        resp = await client.put("/api/tags/order", json={"macs": macs})
+        assert resp.status_code == 400
+        snapshot()
+
+    async def test_reorder_normalizes_case(self, client, two_tag_state):
+        resp = await client.put(
+            "/api/tags/order", json={"macs": ["11:22:33:44:55:66", "aa:bb:cc:dd:ee:ff"]}
+        )
+        assert resp.status_code == 200
+        reloaded = load_config(two_tag_state.config_path)
+        assert [t.mac for t in reloaded.tags] == [
+            "11:22:33:44:55:66",
+            "AA:BB:CC:DD:EE:FF",
+        ]
 
     async def test_reorder_regenerates_dashboard(self, client, app_state):
         await client.post(
