@@ -241,7 +241,8 @@ ruuvi-dashboard/
 │   └── config.yaml           # your tag config (gitignored)
 ├── dashboards/               # generated dashboard JSON (gitignored)
 ├── grafana/
-│   └── provisioning/         # datasource + dashboard provider config
+│   └── provisioning/         # datasource + dashboard provider config;
+│                             # empty alerting/ and plugins/ placeholders
 ├── docker-compose.yml
 ├── .env.example
 └── .env                      # your settings (gitignored)
