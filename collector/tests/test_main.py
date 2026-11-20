@@ -192,3 +192,16 @@ class TestScannerSupervision:
             main.main()
 
         assert exc_info.value.code == 1
+
+    def test_main_explains_permission_errors(self, monkeypatch, caplog):
+        async def fake_run():
+            raise PermissionError(13, "Permission denied", "/config/admin_password")
+
+        monkeypatch.setattr(main, "run", fake_run)
+
+        with pytest.raises(SystemExit) as exc_info:
+            main.main()
+
+        assert exc_info.value.code == 1
+        assert "/config/admin_password" in caplog.text
+        assert f"runs as uid {os.getuid()}, gid {os.getgid()}" in caplog.text

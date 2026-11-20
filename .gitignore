@@ -8,4 +8,5 @@ config/admin_password
 .env
 .claude/
 /.codex
-/dashboards/
+/dashboards/*
+!/dashboards/.gitkeep

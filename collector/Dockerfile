@@ -20,5 +20,12 @@ COPY static/ ./static/
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
+# uv run needs a cache directory, and a user without a home folder has no
+# writable one. The venv is already synced, so skip the cache.
+ENV UV_NO_CACHE=1
+
+# Run as a non-root user. Docker Compose sets the IDs from PUID/PGID so the
+# files the collector writes to config/ and dashboards/ belong to the host user.
+USER 1000:1000
 
 CMD ["uv", "run", "--no-sync", "python", "src/main.py"]
