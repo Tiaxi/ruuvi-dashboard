@@ -33,7 +33,6 @@ updates:
         patterns:
           - pytest
           - pytest-asyncio
-          - aioresponses
           - httpx
           - ruff
       # Runtime minor and patch bumps come as one PR; runtime major bumps
@@ -42,7 +41,6 @@ updates:
         exclude-patterns:
           - pytest
           - pytest-asyncio
-          - aioresponses
           - httpx
           - ruff
         update-types:
