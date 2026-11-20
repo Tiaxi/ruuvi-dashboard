@@ -2,7 +2,7 @@
 # The uv image is a named stage so Dependabot sees it as a normal FROM line.
 FROM ghcr.io/astral-sh/uv:0.13.9 AS uv
 
-FROM python:3.14.10-slim-bookworm
+FROM python:3.15.2-slim-bookworm
 
 COPY --from=uv /uv /usr/local/bin/uv
 
