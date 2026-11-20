@@ -4,12 +4,12 @@ updates:
   - package-ecosystem: docker-compose
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
   # Python base and uv images in collector/Dockerfile
   - package-ecosystem: docker
     directory: /collector
     schedule:
-      interval: weekly
+      interval: monthly
     ignore:
       # Stay on Python 3.14: at the versions in uv.lock, httptools, aiohttp,
       # pydantic-core, dbus-fast, uvloop, watchfiles, pyyaml and other
@@ -24,13 +24,34 @@ updates:
   - package-ecosystem: uv
     directory: /collector
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
+      # The [dependency-groups] dev packages only affect CI, so every bump,
+      # major included, comes as one PR. Keep this list and the
+      # exclude-patterns below in sync with collector/pyproject.toml.
+      collector-dev-tools:
+        patterns:
+          - pytest
+          - pytest-asyncio
+          - httpx
+          - ruff
+      # Runtime minor and patch bumps come as one PR; runtime major bumps
+      # stay as separate PRs.
       collector-minor-and-patch:
+        exclude-patterns:
+          - pytest
+          - pytest-asyncio
+          - httpx
+          - ruff
         update-types:
           - minor
           - patch
+  # All action bumps come as one PR.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
