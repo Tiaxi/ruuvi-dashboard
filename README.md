@@ -34,13 +34,18 @@ Ruuvi Tags ─── BLE ──▶ Collector ─── remote write ──▶ Vi
 git clone https://github.com/Tiaxi/ruuvi-dashboard.git
 cd ruuvi-dashboard
 
-cp .env.example .env          # all settings have sensible defaults
+cp .env.example .env
+nano .env                     # set GF_ADMIN_PASSWORD='<password>' (required, keep the single quotes)
 cp config/config.yaml.example config/config.yaml
 
 docker compose up -d --build
 
 # Open the admin UI at http://<host>:8000
+# Open Grafana at http://<host>:3000 (sign in as admin with GF_ADMIN_PASSWORD)
 ```
+
+The defaults serve Grafana over plain HTTP to any computer on your network. To
+put it behind HTTPS, see [HTTPS and reverse proxy](#https-and-reverse-proxy).
 
 On first start with no tags configured, the Grafana dashboard will show empty graph sections.
 Add tags via the admin UI — they appear in the dashboard within 30 seconds.
@@ -52,13 +57,77 @@ Add tags via the admin UI — they appear in the dashboard within 30 seconds.
 | Variable | Default | Description |
 |---|---|---|
 | `DASHBOARD_TITLE` | `Ruuvi Dashboard` | Dashboard title in Grafana and browser tab |
-| `GRAFANA_ROOT_URL` | `http://localhost:3000/` | Public Grafana URL as seen by browsers; set to your reverse proxy URL, e.g. `https://saa.example.com/` |
-| `GRAFANA_DOMAIN` | `localhost` | Public Grafana hostname used for domain enforcement, e.g. `saa.example.com` |
+| `GF_ADMIN_PASSWORD` | *(required)* | Grafana admin password, only used on first start; see [Grafana admin password](#grafana-admin-password) |
+| `GRAFANA_ROOT_URL` | `http://localhost:3000/` | Public Grafana URL as seen by browsers, used for links Grafana generates; e.g. `http://raspberrypi.local:3000/` on a LAN or `https://saa.example.com/` behind a reverse proxy |
+| `GRAFANA_DOMAIN` | `localhost` | Public Grafana hostname, e.g. `saa.example.com`; only enforced when `GRAFANA_ENFORCE_DOMAIN=true` |
 | `GRAFANA_SUBPATH` | *(empty)* | Serve Grafana under a subpath (e.g. `/grafana/`) for reverse proxies; include the same path in `GRAFANA_ROOT_URL` |
+| `GRAFANA_ENFORCE_DOMAIN` | `false` | Redirect requests for any other hostname to `GRAFANA_DOMAIN`; set `true` for HTTPS/reverse proxy |
+| `GRAFANA_COOKIE_SECURE` | `false` | Send the Grafana login cookie over HTTPS only; set `true` for HTTPS/reverse proxy |
 | `ADMIN_PORT` | `8000` | Host port for the admin UI |
 | `GRAFANA_PORT` | `3000` | Host port for Grafana |
-| `GF_ADMIN_PASSWORD` | `admin` | Grafana admin password (only used on first start) |
 | `VM_RETENTION` | `1y` | VictoriaMetrics data retention period |
+
+### HTTPS and reverse proxy
+
+The defaults are for plain HTTP on a home network. When Grafana is served over
+HTTPS at a fixed hostname (for example behind a reverse proxy), use the
+hardened settings in `.env`:
+
+```bash
+GRAFANA_ROOT_URL=https://saa.example.com/
+GRAFANA_DOMAIN=saa.example.com
+GRAFANA_ENFORCE_DOMAIN=true
+GRAFANA_COOKIE_SECURE=true
+# Optional, when served under a subpath:
+# GRAFANA_ROOT_URL=https://saa.example.com/grafana/
+# GRAFANA_SUBPATH=/grafana/
+```
+
+Do not enable `GRAFANA_ENFORCE_DOMAIN` or `GRAFANA_COOKIE_SECURE` for plain
+HTTP on a LAN: the first redirects browsers that open Grafana by IP or hostname
+to `GRAFANA_DOMAIN`, and the second makes login fail over HTTP. With
+`GRAFANA_ENFORCE_DOMAIN=true`, the reverse proxy must pass the public `Host`
+header through to Grafana, or Grafana keeps redirecting to itself.
+
+### Grafana admin password
+
+`GF_ADMIN_PASSWORD` must be set in `.env`; `docker compose` refuses to run
+without it. Put the value in single quotes (`GF_ADMIN_PASSWORD='...'`), or
+Compose expands any `$` in it. Write an apostrophe inside the value as `\'`,
+e.g. `GF_ADMIN_PASSWORD='it\'s$secret'`.
+
+Grafana only reads it on the first start, when it creates the admin user, so
+changing it in `.env` later has no effect. To change the password of an
+existing install:
+
+```bash
+docker compose exec grafana grafana cli admin reset-admin-password '<new password>'
+```
+
+Installs created before this was required started with the password `admin`
+unless `GF_ADMIN_PASSWORD` was changed before the first start. If that is your
+case, change it with the command above.
+
+### VictoriaMetrics access
+
+VictoriaMetrics has no authentication, so its port is not published on the
+host. The collector and Grafana reach it on the internal Docker network as
+`victoriametrics:8428`. For diagnostics, run commands inside the container:
+
+```bash
+docker compose exec victoriametrics wget -qO- http://127.0.0.1:8428/api/v1/status/tsdb
+```
+
+Or publish it on the host's loopback interface only with a
+`docker-compose.override.yml` next to `docker-compose.yml` (Compose loads it
+automatically), then use `http://127.0.0.1:8428` on the host:
+
+```yaml
+services:
+  victoriametrics:
+    ports:
+      - "127.0.0.1:8428:8428"
+```
 
 ### Tag Config (`config/config.yaml`)
 
