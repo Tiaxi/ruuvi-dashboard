@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 
 import aiohttp
 
@@ -101,6 +102,21 @@ class MetricsWriter:
     def update_min_interval(self, value: int | None) -> None:
         """Update the minimum write interval for throttling."""
         self._min_interval = value
+
+    def update_tag_names(self, names: Mapping[str, str]) -> None:
+        """Apply tag changes to readings that are still queued.
+
+        ``names`` maps each enabled tag's MAC to its current name. A queued
+        reading whose tag was disabled or removed is dropped, and one whose tag
+        was renamed is sent under the new name. A reading the worker already
+        took is sent as it was.
+        """
+        for mac, (reading, name, rssi, timestamp_ns) in list(self._pending.items()):
+            new_name = names.get(mac)
+            if new_name is None:
+                del self._pending[mac]
+            elif new_name != name:
+                self._pending[mac] = (reading, new_name, rssi, timestamp_ns)
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

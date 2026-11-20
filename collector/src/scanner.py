@@ -43,8 +43,16 @@ class RuuviScanner:
         self.status = ScannerStatus.STARTING
 
     def update_config(self, config: AppConfig) -> None:
-        """Apply a new configuration (e.g. after tag changes)."""
+        """Apply a new configuration (e.g. after tag changes).
+
+        Readings still queued in the writer follow the change, so a disabled
+        or removed tag gets no more samples and a renamed tag's queued reading
+        is not written under its old name.
+        """
         self._config = config
+        self._writer.update_tag_names(
+            {mac: tag.name for mac, tag in config.enabled_tags_map.items()}
+        )
         logger.info(
             "Scanner config updated: %d tags enabled",
             len(config.enabled_tags_map),
