@@ -14,6 +14,7 @@ from pathlib import Path
 import uvicorn
 
 from api import AppState, create_app
+from auth import resolve_admin_password
 from config import AppConfig, ConfigWatcher, ReadingsStore, load_config, save_config
 from dashboard import write_dashboard
 from scanner import RuuviScanner
@@ -105,7 +106,10 @@ async def run() -> int:
     watcher = ConfigWatcher(config_path, on_change=on_config_change)
     app_state.watcher = watcher
 
-    app = create_app(app_state)
+    admin_password = resolve_admin_password(
+        config_path, os.environ.get("ADMIN_PASSWORD")
+    )
+    app = create_app(app_state, admin_password=admin_password)
 
     stop_event = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):

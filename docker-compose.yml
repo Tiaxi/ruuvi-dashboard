@@ -12,6 +12,7 @@ services:
     environment:
       - DASHBOARD_TITLE=${DASHBOARD_TITLE:-Ruuvi Dashboard}
       - DASHBOARD_PATH=/dashboards/ruuvi.json
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     depends_on:
       - victoriametrics
 

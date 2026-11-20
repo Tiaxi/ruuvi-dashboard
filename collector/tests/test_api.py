@@ -59,11 +59,16 @@ def two_tag_state(app_state):
     return app_state
 
 
+ADMIN_PASSWORD = "test-admin-password"
+
+
 @pytest.fixture
 def client(app_state):
-    app = create_app(app_state)
+    app = create_app(app_state, admin_password=ADMIN_PASSWORD)
     transport = ASGITransport(app=app)
-    return AsyncClient(transport=transport, base_url="http://test")
+    return AsyncClient(
+        transport=transport, base_url="http://test", auth=("admin", ADMIN_PASSWORD)
+    )
 
 
 class TestHealthEndpoint:
