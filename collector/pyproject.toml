@@ -16,7 +16,6 @@ dependencies = [
 dev = [
     "pytest>=9.2.0,<10.0",
     "pytest-asyncio>=1.5.0,<2.0",
-    "aioresponses>=0.7,<1.0",
     "httpx>=0.28,<1.0",
     "ruff>=0.11",
 ]
@@ -33,6 +32,7 @@ target-version = "py314"
 select = ["ALL"]
 ignore = [
     "COM812",  # trailing commas — conflicts with ruff formatter
+    "CPY001",  # copyright headers — the project is licensed once in LICENSE
     "D203",    # blank line before class docstring — incompatible with D211
     "D213",    # multi-line summary second line — incompatible with D212
     "G004",    # f-string logging — readable and fine for applications

@@ -137,7 +137,14 @@ async def run() -> int:
     }
 
     logger.info("Collector running with admin UI on port %d", admin_port)
-    return await _supervise(workers, server, server_task, stop_event, watcher, writer)
+    return await _supervise(
+        workers,
+        server=server,
+        server_task=server_task,
+        stop_event=stop_event,
+        watcher=watcher,
+        writer=writer,
+    )
 
 
 async def _serve(server: uvicorn.Server) -> None:
@@ -155,6 +162,7 @@ async def _serve(server: uvicorn.Server) -> None:
 
 async def _supervise(  # noqa: PLR0913
     workers: dict[asyncio.Task[None], str],
+    *,
     server: uvicorn.Server,
     server_task: asyncio.Task[None],
     stop_event: asyncio.Event,

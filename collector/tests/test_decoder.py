@@ -6,6 +6,7 @@ from decoder import decode_rawv2
 
 
 def _build_payload(
+    *,
     data_format=0x05,
     temperature_raw=4500,  # 22.50 C
     humidity_raw=18000,  # 45.00%
