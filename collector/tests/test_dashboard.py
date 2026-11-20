@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
+from conftest import failing
 
+import fileutil
 from dashboard import generate_dashboard, write_dashboard
 
 
@@ -153,3 +156,15 @@ class TestWriteDashboard:
         titles = [p.get("title") for p in d["panels"]]
         assert "New" in titles
         assert "Old" not in titles
+
+    def test_failed_write_keeps_previous_dashboard(self, tmp_path, monkeypatch):
+        path = str(tmp_path / "ruuvi.json")
+        write_dashboard(["Old"], path)
+        before = Path(path).read_text()
+
+        monkeypatch.setattr(fileutil.os, "fsync", failing(OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            write_dashboard(["New"], path)
+
+        assert Path(path).read_text() == before
+        json.loads(before)

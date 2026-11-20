@@ -5,14 +5,19 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import api
+import config as config_module
 from api import AppState, create_app
 from config import (
     AppConfig,
+    CollectorConfig,
     ReadingsStore,
     TagConfig,
     load_config,
     save_config,
 )
+from dashboard import write_dashboard
+from writer import MetricsWriter
 
 
 @pytest.fixture
@@ -95,7 +100,7 @@ class TestHealthEndpoint:
         assert resp.json()["scanner"] == "failed"
 
 
-from conftest import make_reading
+from conftest import failing, make_reading
 
 
 class TestGetTags:
@@ -375,3 +380,70 @@ class TestStaticFiles:
         resp = await client.get("/")
         assert resp.status_code == 200
         assert "text/html" in resp.headers.get("content-type", "")
+
+
+class TestApplyConfigFailures:
+    """A failed save leaves files and runtime state on the old config (issue #7)."""
+
+    @pytest.fixture
+    def dashboard_before(self, app_state):
+        write_dashboard(["Room A"], app_state.dashboard_path)
+        return Path(app_state.dashboard_path).read_text()
+
+    async def test_dashboard_render_failure_changes_nothing(
+        self, client, app_state, snapshot, dashboard_before, monkeypatch
+    ):
+        monkeypatch.setattr(
+            api, "render_dashboard", failing(RuntimeError("render failed"))
+        )
+        with pytest.raises(RuntimeError, match="render failed"):
+            await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": "New"})
+
+        snapshot()
+        assert Path(app_state.dashboard_path).read_text() == dashboard_before
+
+    async def test_dashboard_write_failure_changes_nothing(
+        self, client, app_state, snapshot, dashboard_before, monkeypatch
+    ):
+        monkeypatch.setattr(
+            api, "write_dashboard_text", failing(OSError("dashboards dir read-only"))
+        )
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": "New"})
+
+        assert resp.status_code == 500
+        assert "dashboard" in resp.json()["detail"]
+        snapshot()
+        assert Path(app_state.dashboard_path).read_text() == dashboard_before
+
+    async def test_config_write_failure_restores_dashboard(
+        self, client, app_state, snapshot, dashboard_before, monkeypatch
+    ):
+        monkeypatch.setattr(
+            config_module, "atomic_write_text", failing(OSError("config dir read-only"))
+        )
+        resp = await client.patch("/api/tags/AA:BB:CC:DD:EE:FF", json={"name": "New"})
+
+        assert resp.status_code == 500
+        assert "configuration" in resp.json()["detail"]
+        snapshot()
+        assert Path(app_state.dashboard_path).read_text() == dashboard_before
+
+
+class TestApplyConfigWriter:
+    def test_new_victoriametrics_url_reaches_writer(self, app_state):
+        """Applying a config with a new URL moves writes there (issue #6)."""
+        writer = MetricsWriter("http://db-a:8428", min_write_interval=5)
+        app_state.writer = writer
+        new_config = app_state.config.model_copy(
+            update={
+                "collector": CollectorConfig(
+                    victoriametrics_url="http://db-b:8428",
+                    min_write_interval_seconds=10,
+                )
+            }
+        )
+
+        api._apply_config(app_state, new_config)  # noqa: SLF001 - both apply paths
+
+        assert writer._url == "http://db-b:8428/write?precision=ns"  # noqa: SLF001
+        assert writer._min_interval == 10  # noqa: SLF001

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
@@ -21,10 +22,12 @@ from config import (
     normalize_mac,
     save_config,
 )
-from dashboard import write_dashboard
+from dashboard import render_dashboard, write_dashboard_text
 from decoder import RuuviReading
 from scanner import RuuviScanner
 from writer import MetricsWriter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,8 +107,34 @@ def _build_config(state: AppState, **updates: Any) -> AppConfig:  # noqa: ANN401
 
 
 def _apply_config(state: AppState, new_config: AppConfig) -> None:
-    """Save config to disk and update all in-memory state."""
-    save_config(new_config, state.config_path, state.watcher)
+    """Save a validated config to disk, then switch the running app to it.
+
+    The dashboard JSON is rendered before anything is written, and the
+    dashboard is written before the config, so any failure leaves the config
+    file and runtime state on the previous config. If the config write fails
+    after the dashboard was written, the previous dashboard is put back.
+    """
+    if state.dashboard_path:
+        dashboard_text = _render_dashboard(state, new_config)
+        try:
+            write_dashboard_text(dashboard_text, state.dashboard_path)
+        except OSError as exc:
+            raise HTTPException(
+                500, f"Could not write the Grafana dashboard: {exc}"
+            ) from exc
+
+    try:
+        save_config(new_config, state.config_path, state.watcher)
+    except OSError as exc:
+        if state.dashboard_path:
+            try:
+                write_dashboard_text(
+                    _render_dashboard(state, state.config), state.dashboard_path
+                )
+            except OSError:
+                logger.exception("Failed to restore the previous dashboard")
+        raise HTTPException(500, f"Could not save the configuration: {exc}") from exc
+
     state.config = new_config
     if state.scanner:
         state.scanner.update_config(new_config)
@@ -113,13 +142,15 @@ def _apply_config(state: AppState, new_config: AppConfig) -> None:
         state.writer.update_min_interval(
             new_config.collector.min_write_interval_seconds
         )
-    if state.dashboard_path:
-        write_dashboard(
-            [t.name for t in new_config.tags],
-            state.dashboard_path,
-            state.dashboard_title,
-            new_config.dashboard.columns_per_row,
-        )
+        state.writer.update_url(new_config.collector.victoriametrics_url)
+
+
+def _render_dashboard(state: AppState, config: AppConfig) -> str:
+    return render_dashboard(
+        [t.name for t in config.tags],
+        state.dashboard_title,
+        config.dashboard.columns_per_row,
+    )
 
 
 def _serialize_reading(reading: RuuviReading) -> dict[str, Any]:

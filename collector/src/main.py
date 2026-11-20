@@ -92,6 +92,7 @@ async def run() -> int:
         def apply() -> None:
             scanner.update_config(new_config)
             writer.update_min_interval(new_config.collector.min_write_interval_seconds)
+            writer.update_url(new_config.collector.victoriametrics_url)
             app_state.config = new_config
             write_dashboard(
                 [t.name for t in new_config.tags],
