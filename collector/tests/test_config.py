@@ -1,11 +1,12 @@
 import textwrap
 import time
-from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_reading
+from conftest import failing, make_reading
 from pydantic import ValidationError
 
+import config as config_module
+import fileutil
 from config import (
     AppConfig,
     CollectorConfig,
@@ -17,6 +18,14 @@ from config import (
     load_config,
     save_config,
 )
+
+
+def _one_tag_config(name: str) -> AppConfig:
+    return AppConfig(tags=[TagConfig(mac="AA:BB:CC:DD:EE:FF", name=name)])
+
+
+def _tag_names(changes: list[AppConfig]) -> list[str]:
+    return [c.tags[0].name for c in changes if c.tags]
 
 
 class TestTagConfig:
@@ -266,15 +275,101 @@ class TestConfigWatcher:
         watcher.start()
         try:
             time.sleep(0.5)
-            watcher.mark_own_write()
-            config_file.write_text(
-                'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Test"\n'
-            )
-            time.sleep(3)
+            save_config(_one_tag_config("Saved"), str(config_file), watcher)
+            time.sleep(1.5)
         finally:
             watcher.stop()
 
-        assert len(changes) == 0
+        assert changes == []
+
+    def test_applies_external_edit_right_after_own_save(self, tmp_path):
+        """An external edit just after an API save is reloaded (issue #8)."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("tags: []\n")
+
+        changes = []
+        watcher = ConfigWatcher(str(config_file), on_change=changes.append)
+        watcher.start()
+        try:
+            time.sleep(0.5)
+            save_config(_one_tag_config("Saved"), str(config_file), watcher)
+            config_file.write_text(
+                'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Edited"\n'
+            )
+            for _ in range(40):
+                if _tag_names(changes)[-1:] == ["Edited"]:
+                    break
+                time.sleep(0.1)
+        finally:
+            watcher.stop()
+
+        # An in-place write can also be seen half-written (an empty file), so
+        # check only that the edit was applied and our own save was not.
+        assert _tag_names(changes)[-1:] == ["Edited"]
+        assert "Saved" not in _tag_names(changes)
+
+    def test_own_save_then_external_edit_without_observer(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("tags: []\n")
+        changes = []
+        watcher = ConfigWatcher(str(config_file), on_change=changes.append)
+        reload = watcher._handle_change  # noqa: SLF001 - what the observer calls
+
+        save_config(_one_tag_config("Saved"), str(config_file), watcher)
+        reload()
+        assert changes == []
+
+        config_file.write_text(
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Edited"\n'
+        )
+        reload()
+        reload()  # a second event for the same content is not reapplied
+        assert [c.tags[0].name for c in changes] == ["Edited"]
+
+        # Reverting by hand to the text we saved earlier is still an edit.
+        save_config(_one_tag_config("Saved"), str(tmp_path / "other.yaml"))
+        config_file.write_text((tmp_path / "other.yaml").read_text())
+        reload()
+        assert [c.tags[0].name for c in changes] == ["Edited", "Saved"]
+
+    def test_undecodable_file_does_not_stop_reloads(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("tags: []\n")
+        changes = []
+        watcher = ConfigWatcher(str(config_file), on_change=changes.append)
+        reload = watcher._handle_change  # noqa: SLF001 - what the observer calls
+
+        config_file.write_bytes(
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Sauna \xe4"\n'.encode(
+                "latin-1"
+            )
+        )
+        reload()  # logged, not raised into the observer thread
+        assert changes == []
+
+        config_file.write_text(
+            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "Fixed"\n'
+        )
+        reload()
+        assert _tag_names(changes) == ["Fixed"]
+
+    def test_failed_own_save_does_not_hide_that_content(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("tags: []\n")
+        changes = []
+        watcher = ConfigWatcher(str(config_file), on_change=changes.append)
+
+        monkeypatch.setattr(
+            config_module, "atomic_write_text", failing(OSError("disk full"))
+        )
+        with pytest.raises(OSError, match="disk full"):
+            save_config(_one_tag_config("Saved"), str(config_file), watcher)
+        monkeypatch.undo()
+
+        save_config(_one_tag_config("Saved"), str(tmp_path / "other.yaml"))
+        config_file.write_text((tmp_path / "other.yaml").read_text())
+        watcher._handle_change()  # noqa: SLF001 - what the observer calls
+        assert [c.tags[0].name for c in changes] == ["Saved"]
 
     def test_rejected_reload_keeps_last_valid_config(self, tmp_path):
         config_file = tmp_path / "config.yaml"
@@ -316,12 +411,17 @@ class TestSaveConfig:
         assert reloaded.tags[1].enabled is False
         assert reloaded.collector.min_write_interval_seconds == 30
 
-    def test_save_calls_mark_own_write(self, tmp_path):
-        config = AppConfig(tags=[])
-        path = str(tmp_path / "config.yaml")
-        watcher = MagicMock()
-        save_config(config, path, watcher=watcher)
-        watcher.mark_own_write.assert_called_once()
+    def test_failed_save_keeps_previous_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.yaml"
+        save_config(_one_tag_config("Old"), str(path))
+        before = path.read_text()
+
+        monkeypatch.setattr(fileutil.os, "fsync", failing(OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            save_config(_one_tag_config("New"), str(path))
+
+        assert path.read_text() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["config.yaml"]
 
     def test_save_without_watcher(self, tmp_path):
         config = AppConfig(tags=[])

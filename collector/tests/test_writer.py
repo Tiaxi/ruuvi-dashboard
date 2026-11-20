@@ -115,6 +115,23 @@ class TestMetricsWriter:
         total_calls = sum(len(v) for v in m.requests.values())
         assert total_calls == 2
 
+    async def test_update_url_sends_next_write_to_new_database(self):
+        """After a reload from URL A to B, the next write goes to B (issue #6)."""
+        reading = _make_reading()
+        with aioresponses() as m:
+            m.post("http://db-a:8428/write?precision=ns", status=204, repeat=True)
+            m.post("http://db-b:8428/write?precision=ns", status=204, repeat=True)
+            writer = MetricsWriter("http://db-a:8428")
+            await writer.write(reading, "Sauna")
+            writer.update_url("http://db-b:8428")
+            await writer.write(reading, "Sauna")
+            await writer.close()
+
+        hosts = [
+            url.host for (_method, url), calls in m.requests.items() for _ in calls
+        ]
+        assert sorted(hosts) == ["db-a", "db-b"]
+
     async def test_write_logs_error_on_failure(self, caplog):
         reading = _make_reading()
         with aioresponses() as m:

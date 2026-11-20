@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
+import threading
 import time
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from decoder import RuuviReading
+from fileutil import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -98,24 +101,39 @@ class AppConfig(BaseModel):
         return {t.mac: t for t in self.tags if t.enabled}
 
 
-def load_config(path: str) -> AppConfig:
-    """Load and validate configuration from a YAML file."""
-    text = Path(path).read_text()
+def parse_config(text: str) -> AppConfig:
+    """Parse and validate configuration from YAML text."""
     data = yaml.safe_load(text)
     if data is None:
         data = {}
     return AppConfig.model_validate(data)
 
 
+def load_config(path: str) -> AppConfig:
+    """Load and validate configuration from a YAML file."""
+    return parse_config(Path(path).read_text(encoding="utf-8"))
+
+
+def dump_config(config: AppConfig) -> str:
+    """Serialize configuration to YAML text."""
+    data = config.model_dump(exclude_defaults=False)
+    return yaml.dump(data, default_flow_style=False, sort_keys=False)
+
+
 def save_config(
     config: AppConfig, path: str, watcher: ConfigWatcher | None = None
 ) -> None:
-    """Serialize configuration to YAML and write to disk."""
-    if watcher is not None:
-        watcher.mark_own_write()
+    """Write configuration to disk atomically.
 
-    data = config.model_dump(exclude_defaults=False)
-    Path(path).write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    With a watcher, the write is recorded so the watcher does not reload
+    the file we just wrote.
+    """
+    text = dump_config(config)
+    if watcher is None:
+        atomic_write_text(path, text)
+        return
+    with watcher.own_write(text):
+        atomic_write_text(path, text)
 
 
 @dataclass
@@ -158,14 +176,21 @@ class ReadingsStore:
 
 
 class ConfigWatcher:
-    """Watch the config file for external changes and trigger a callback."""
+    """Watch the config file for external changes and trigger a callback.
 
-    _OWN_WRITE_WINDOW = 2.0
+    The watcher remembers the text of the configuration the app is running
+    (our last save, or the last external edit it applied). A file event whose
+    current file text matches it is ignored, so our own saves are not
+    reloaded, while any other content is reloaded no matter when it appears.
+    """
 
     def __init__(self, path: str, on_change: Callable[[AppConfig], None]) -> None:
         self._path = path
         self._on_change = on_change
-        self._own_write_time: float = 0.0
+        self._known_text: str | None = None
+        # Held while writing or reading the file and updating _known_text, so
+        # an event can never see our new file text before it is recorded.
+        self._lock = threading.Lock()
         self._observer = Observer()
 
         handler = _ConfigFileHandler(self)
@@ -181,20 +206,38 @@ class ConfigWatcher:
         self._observer.stop()
         self._observer.join()
 
-    def mark_own_write(self) -> None:
-        """Record that we just wrote the config file ourselves."""
-        self._own_write_time = time.monotonic()
+    @contextlib.contextmanager
+    def own_write(self, text: str) -> Iterator[None]:
+        """Wrap our own write of ``text``; the watcher will not reload it.
+
+        File events are held back until the write finishes, and the text is
+        recorded only if the write succeeds.
+        """
+        with self._lock:
+            yield
+            self._known_text = text
 
     def _handle_change(self) -> None:
-        if time.monotonic() - self._own_write_time < self._OWN_WRITE_WINDOW:
-            logger.debug("Ignoring own write to config")
-            return
+        with self._lock:
+            try:
+                text = Path(self._path).read_text(encoding="utf-8")
+            except OSError, UnicodeError:
+                logger.exception("Failed to read config")
+                return
+            if text == self._known_text:
+                logger.debug("Config file unchanged, ignoring event")
+                return
+            try:
+                config = parse_config(text)
+            except Exception:
+                logger.exception("Failed to reload config")
+                return
+            self._known_text = text
         try:
-            config = load_config(self._path)
             self._on_change(config)
             logger.info("Config reloaded from disk")
         except Exception:
-            logger.exception("Failed to reload config")
+            logger.exception("Failed to apply reloaded config")
 
 
 class _ConfigFileHandler(FileSystemEventHandler):

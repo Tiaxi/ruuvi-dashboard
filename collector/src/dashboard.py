@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from fileutil import atomic_write_text
+
 # Must match the uid in grafana/provisioning/datasources/victoriametrics.yml.
 # An empty uid works in the normal dashboard view (the frontend falls back to
 # the default datasource), but externally shared dashboards then query
@@ -329,6 +331,22 @@ def generate_dashboard(
     }
 
 
+def render_dashboard(
+    tag_names: list[str],
+    title: str = "Ruuvi Dashboard",
+    columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
+) -> str:
+    """Generate the Grafana dashboard as JSON text."""
+    dashboard = generate_dashboard(tag_names, title, columns_per_row)
+    return json.dumps(dashboard, indent=2, ensure_ascii=False)
+
+
+def write_dashboard_text(text: str, path: str) -> None:
+    """Atomically write rendered dashboard JSON, so Grafana never reads half."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, text)
+
+
 def write_dashboard(
     tag_names: list[str],
     path: str,
@@ -336,7 +354,4 @@ def write_dashboard(
     columns_per_row: int = DEFAULT_COLUMNS_PER_ROW,
 ) -> None:
     """Generate and write the Grafana dashboard JSON to disk."""
-    dashboard = generate_dashboard(tag_names, title, columns_per_row)
-    dest = Path(path)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(dashboard, indent=2, ensure_ascii=False))
+    write_dashboard_text(render_dashboard(tag_names, title, columns_per_row), path)

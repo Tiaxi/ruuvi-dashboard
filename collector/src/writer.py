@@ -55,10 +55,21 @@ class MetricsWriter:
     """Async writer that posts readings to VictoriaMetrics."""
 
     def __init__(self, base_url: str, min_write_interval: int | None = None) -> None:
-        self._url = f"{base_url}/write?precision=ns"
+        self._url = self._write_url(base_url)
         self._min_interval = min_write_interval
         self._last_write: dict[str, float] = {}
         self._session: aiohttp.ClientSession | None = None
+
+    @staticmethod
+    def _write_url(base_url: str) -> str:
+        return f"{base_url}/write?precision=ns"
+
+    def update_url(self, base_url: str) -> None:
+        """Send later writes to a new VictoriaMetrics base URL.
+
+        Writes already in flight finish against the old URL.
+        """
+        self._url = self._write_url(base_url)
 
     def update_min_interval(self, value: int | None) -> None:
         """Update the minimum write interval for throttling."""

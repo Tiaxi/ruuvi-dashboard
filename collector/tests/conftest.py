@@ -17,3 +17,12 @@ def make_reading(**overrides) -> RuuviReading:
     }
     defaults.update(overrides)
     return RuuviReading(**defaults)
+
+
+def failing(exc: BaseException):
+    """Return a stand-in function that raises ``exc`` when called."""
+
+    def fail(*_args, **_kwargs):
+        raise exc
+
+    return fail
