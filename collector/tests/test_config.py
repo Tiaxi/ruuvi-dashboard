@@ -165,8 +165,10 @@ class TestLoadConfig:
             'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: ""\n',
             'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: null\n',
             'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "R"\n    enabled: null\n',
-            'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n'
-            '  - mac: "aa:bb:cc:dd:ee:ff"\n    name: "B"\n',
+            (
+                'tags:\n  - mac: "AA:BB:CC:DD:EE:FF"\n    name: "A"\n'
+                '  - mac: "aa:bb:cc:dd:ee:ff"\n    name: "B"\n'
+            ),
         ],
     )
     def test_load_invalid_yaml_raises_validation_error(self, tmp_path, text):

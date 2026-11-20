@@ -7,7 +7,6 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from aioresponses import aioresponses
 
 import writer as writer_module
 from decoder import RuuviReading
@@ -100,72 +99,57 @@ class TestFormatLineProtocol:
 
 
 class TestMetricsWriter:
-    async def test_write_posts_to_victoriametrics(self):
+    async def test_write_posts_to_victoriametrics(self, backend):
+        writer = MetricsWriter(backend.base_url)
+        await writer.write(_make_reading(), "Sauna")
+        await writer.close()
+
+        assert backend.paths == ["/write?precision=ns"]
+        assert "ruuvi," in backend.bodies[0]
+        assert "temperature=22.5" in backend.bodies[0]
+
+    async def test_write_throttle_skips_recent(self, backend):
         reading = _make_reading()
-        with aioresponses() as m:
-            m.post("http://localhost:8428/write?precision=ns", status=204)
-            writer = MetricsWriter("http://localhost:8428")
-            await writer.write(reading, "Sauna")
-            await writer.close()
+        writer = MetricsWriter(backend.base_url, min_write_interval=60)
+        await writer.write(reading, "Sauna")  # first write goes through
+        await writer.write(reading, "Sauna")  # second write throttled
+        await writer.close()
 
-        total_calls = sum(len(v) for v in m.requests.values())
-        assert total_calls == 1
-        call = next(iter(m.requests.values()))[0]
-        body = call.kwargs["data"]
-        assert "ruuvi," in body
-        assert "temperature=22.5" in body
+        assert len(backend.bodies) == 1
 
-    async def test_write_throttle_skips_recent(self):
+    async def test_write_no_throttle_by_default(self, backend):
         reading = _make_reading()
-        with aioresponses() as m:
-            m.post("http://localhost:8428/write?precision=ns", status=204, repeat=True)
-            writer = MetricsWriter("http://localhost:8428", min_write_interval=60)
-            await writer.write(reading, "Sauna")  # first write goes through
-            await writer.write(reading, "Sauna")  # second write throttled
-            await writer.close()
+        writer = MetricsWriter(backend.base_url)
+        await writer.write(reading, "Sauna")
+        await writer.write(reading, "Sauna")
+        await writer.close()
 
-        # Only one POST should have been made
-        total_calls = sum(len(v) for v in m.requests.values())
-        assert total_calls == 1
+        assert len(backend.bodies) == 2
 
-    async def test_write_no_throttle_by_default(self):
-        reading = _make_reading()
-        with aioresponses() as m:
-            m.post("http://localhost:8428/write?precision=ns", status=204, repeat=True)
-            writer = MetricsWriter("http://localhost:8428")
-            await writer.write(reading, "Sauna")
-            await writer.write(reading, "Sauna")
-            await writer.close()
-
-        total_calls = sum(len(v) for v in m.requests.values())
-        assert total_calls == 2
-
-    async def test_update_url_sends_next_write_to_new_database(self):
+    async def test_update_url_sends_next_write_to_new_database(self, backend):
         """After a reload from URL A to B, the next write goes to B (issue #6)."""
         reading = _make_reading()
-        with aioresponses() as m:
-            m.post("http://db-a:8428/write?precision=ns", status=204, repeat=True)
-            m.post("http://db-b:8428/write?precision=ns", status=204, repeat=True)
-            writer = MetricsWriter("http://db-a:8428")
+        other = FakeVictoriaMetrics()
+        await other.server.start_server()
+        try:
+            writer = MetricsWriter(backend.base_url)
             await writer.write(reading, "Sauna")
-            writer.update_url("http://db-b:8428")
-            await writer.write(reading, "Sauna")
-            await writer.close()
-
-        hosts = [
-            url.host for (_method, url), calls in m.requests.items() for _ in calls
-        ]
-        assert sorted(hosts) == ["db-a", "db-b"]
-
-    async def test_write_logs_error_on_failure(self, caplog):
-        reading = _make_reading()
-        with aioresponses() as m:
-            m.post("http://localhost:8428/write?precision=ns", status=500)
-            writer = MetricsWriter("http://localhost:8428")
+            writer.update_url(other.base_url)
             await writer.write(reading, "Sauna")
             await writer.close()
+        finally:
+            await other.server.close()
 
-        assert "Failed to write" in caplog.text or "500" in caplog.text
+        assert len(backend.bodies) == 1
+        assert len(other.bodies) == 1
+
+    async def test_write_logs_error_on_failure(self, backend, caplog):
+        backend.status = 500
+        writer = MetricsWriter(backend.base_url)
+        await writer.write(_make_reading(), "Sauna")
+        await writer.close()
+
+        assert "Failed to write metrics: HTTP 500" in caplog.text
 
 
 class FakeVictoriaMetrics:
@@ -173,6 +157,7 @@ class FakeVictoriaMetrics:
 
     def __init__(self):
         self.bodies: list[str] = []
+        self.paths: list[str] = []
         self.status = 204
         self.release = asyncio.Event()
         self.release.set()
@@ -182,6 +167,7 @@ class FakeVictoriaMetrics:
         self.server = TestServer(app, host="127.0.0.1")
 
     async def _handle(self, request):
+        self.paths.append(request.path_qs)
         self.bodies.append(await request.text())
         self.received.set()
         await self.release.wait()
