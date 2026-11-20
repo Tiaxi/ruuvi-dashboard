@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 
@@ -39,8 +40,13 @@ def _ensure_config(config_path: str) -> AppConfig:
     return load_config(config_path)
 
 
-async def run() -> None:
-    """Start the collector, scanner, API server, and config watcher."""
+async def run() -> int:
+    """Start the collector, scanner, API server, and config watcher.
+
+    Returns the process exit status: 0 after a shutdown signal, 1 when the
+    BLE scanner or the API server stops on its own, so the container's
+    restart policy can bring the collector back.
+    """
     config_path = os.environ.get("CONFIG_PATH", DEFAULT_CONFIG_PATH)
     config = _ensure_config(config_path)
     logger.info(
@@ -105,9 +111,6 @@ async def run() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop_event.set)
 
-    watcher.start()
-    scan_task = asyncio.create_task(scanner.run())
-
     admin_port = int(os.environ.get("ADMIN_PORT", "8000"))
     uv_config = uvicorn.Config(
         app,
@@ -116,27 +119,94 @@ async def run() -> None:
         log_level="info",
     )
     server = uvicorn.Server(uv_config)
-    server.install_signal_handlers = lambda: None
-    server_task = asyncio.create_task(server.serve())
+    # Signals are handled by the loop above; keep uvicorn from taking them over.
+    server.capture_signals = contextlib.nullcontext
+
+    watcher.start()
+    scan_task = asyncio.create_task(scanner.run(), name="ble-scanner")
+    server_task = asyncio.create_task(_serve(server), name="admin-api")
 
     logger.info("Collector running with admin UI on port %d", admin_port)
+    return await _supervise(scan_task, server, server_task, stop_event, watcher, writer)
+
+
+async def _serve(server: uvicorn.Server) -> None:
+    """Run the admin server, turning uvicorn's sys.exit into a task error.
+
+    uvicorn exits the process on startup failures such as a port in use;
+    re-raising lets the supervisor shut everything down in order.
+    """
     try:
-        await stop_event.wait()
+        await server.serve()
+    except SystemExit as exc:
+        msg = f"uvicorn exited with status {exc.code}"
+        raise RuntimeError(msg) from exc
+
+
+async def _supervise(  # noqa: PLR0913
+    scan_task: asyncio.Task[None],
+    server: uvicorn.Server,
+    server_task: asyncio.Task[None],
+    stop_event: asyncio.Event,
+    watcher: ConfigWatcher,
+    writer: MetricsWriter,
+) -> int:
+    """Wait for a shutdown signal or a task failure, then clean up.
+
+    Cleanup runs whatever the tasks raised. Returns the exit status.
+    """
+    stop_task = asyncio.create_task(stop_event.wait(), name="stop-signal")
+    exit_code = 0
+    try:
+        done, _ = await asyncio.wait(
+            {scan_task, server_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        exit_code = _check_unexpected_exit(scan_task, server_task, done)
     finally:
         logger.info("Shutting down...")
-        scan_task.cancel()
         server.should_exit = True
-        with contextlib.suppress(asyncio.CancelledError):
-            await scan_task
-        await server_task
-        watcher.stop()
-        await writer.close()
-        logger.info("Shutdown complete.")
+        scan_task.cancel()
+        stop_task.cancel()
+        try:
+            await asyncio.gather(
+                scan_task, server_task, stop_task, return_exceptions=True
+            )
+        finally:
+            watcher.stop()
+            await writer.close()
+            logger.info("Shutdown complete.")
+    return exit_code
+
+
+def _check_unexpected_exit(
+    scan_task: asyncio.Task[None],
+    server_task: asyncio.Task[None],
+    done: set[asyncio.Task[None]],
+) -> int:
+    """Log tasks that ended before a shutdown signal; return the exit status."""
+    exit_code = 0
+    for task, name in ((scan_task, "BLE scanner"), (server_task, "Admin API server")):
+        if task not in done:
+            continue
+        exit_code = 1
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            logger.error(
+                "%s failed, exiting so the collector restarts",
+                name,
+                exc_info=error,
+            )
+        else:
+            logger.error(
+                "%s stopped unexpectedly, exiting so the collector restarts", name
+            )
+    return exit_code
 
 
 def main() -> None:
-    """Run the collector."""
-    asyncio.run(run())
+    """Run the collector and exit with its status."""
+    sys.exit(asyncio.run(run()))
 
 
 if __name__ == "__main__":

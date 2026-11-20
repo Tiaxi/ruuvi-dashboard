@@ -74,6 +74,20 @@ class TestHealthEndpoint:
         assert "uptime_seconds" in data
         assert data["tag_count"] == 1
         assert data["enabled_tag_count"] == 1
+        assert data["scanner"] == "unknown"
+
+    async def test_health_reports_scanner_status(self, client, app_state):
+        from scanner import RuuviScanner, ScannerStatus
+
+        app_state.scanner = RuuviScanner(
+            app_state.config, writer=None, readings=app_state.readings
+        )
+        resp = await client.get("/api/health")
+        assert resp.json()["scanner"] == "starting"
+
+        app_state.scanner.status = ScannerStatus.FAILED
+        resp = await client.get("/api/health")
+        assert resp.json()["scanner"] == "failed"
 
 
 from conftest import make_reading

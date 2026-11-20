@@ -139,6 +139,7 @@ def create_app(state: AppState) -> FastAPI:
             "uptime_seconds": round(time.time() - state.start_time),
             "tag_count": len(state.config.tags),
             "enabled_tag_count": len(state.config.enabled_tags_map),
+            "scanner": state.scanner.status if state.scanner else "unknown",
         }
 
     @app.get("/api/tags")
