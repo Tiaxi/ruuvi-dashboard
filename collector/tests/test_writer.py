@@ -60,6 +60,21 @@ class TestFormatLineProtocol:
         line = format_line_protocol(reading, "Living Room", 0)
         assert r"name=Living\ Room" in line
 
+    @pytest.mark.parametrize(
+        ("name", "escaped"),
+        [
+            ("Room\\", r"Room\\"),
+            ("a\\b", r"a\\b"),
+            ("a\\ b", r"a\\\ b"),
+            ("a,b=c", r"a\,b\=c"),
+            ('say "hi"', r'say\ "hi"'),
+        ],
+    )
+    def test_name_special_characters_escaped(self, name, escaped):
+        reading = _make_reading()
+        line = format_line_protocol(reading, name, 0)
+        assert f"name={escaped} " in line
+
     def test_none_fields_omitted(self):
         reading = _make_reading(temperature=None, humidity=None)
         line = format_line_protocol(reading, "Test", 0)
