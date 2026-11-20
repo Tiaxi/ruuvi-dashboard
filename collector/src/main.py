@@ -45,8 +45,8 @@ async def run() -> int:
     """Start the collector, scanner, API server, and config watcher.
 
     Returns the process exit status: 0 after a shutdown signal, 1 when the
-    BLE scanner or the API server stops on its own, so the container's
-    restart policy can bring the collector back.
+    BLE scanner, the metrics writer or the API server stops on its own, so
+    the container's restart policy can bring the collector back.
     """
     config_path = os.environ.get("CONFIG_PATH", DEFAULT_CONFIG_PATH)
     config = _ensure_config(config_path)
@@ -128,11 +128,15 @@ async def run() -> int:
     server.capture_signals = contextlib.nullcontext
 
     watcher.start()
-    scan_task = asyncio.create_task(scanner.run(), name="ble-scanner")
     server_task = asyncio.create_task(_serve(server), name="admin-api")
+    workers = {
+        asyncio.create_task(writer.run(), name="metrics-writer"): "Metrics writer",
+        asyncio.create_task(scanner.run(), name="ble-scanner"): "BLE scanner",
+        server_task: "Admin API server",
+    }
 
     logger.info("Collector running with admin UI on port %d", admin_port)
-    return await _supervise(scan_task, server, server_task, stop_event, watcher, writer)
+    return await _supervise(workers, server, server_task, stop_event, watcher, writer)
 
 
 async def _serve(server: uvicorn.Server) -> None:
@@ -149,34 +153,38 @@ async def _serve(server: uvicorn.Server) -> None:
 
 
 async def _supervise(  # noqa: PLR0913
-    scan_task: asyncio.Task[None],
+    workers: dict[asyncio.Task[None], str],
     server: uvicorn.Server,
     server_task: asyncio.Task[None],
     stop_event: asyncio.Event,
     watcher: ConfigWatcher,
     writer: MetricsWriter,
 ) -> int:
-    """Wait for a shutdown signal or a task failure, then clean up.
+    """Wait for a shutdown signal or a worker task ending, then clean up.
 
+    ``workers`` maps each long-running task, ``server_task`` included, to its
+    name for logs. The admin server is stopped through ``server.should_exit``;
+    the other workers are cancelled, which drops readings the metrics writer
+    has not sent yet.
     Cleanup runs whatever the tasks raised. Returns the exit status.
     """
     stop_task = asyncio.create_task(stop_event.wait(), name="stop-signal")
     exit_code = 0
     try:
         done, _ = await asyncio.wait(
-            {scan_task, server_task, stop_task},
+            {*workers, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
-        exit_code = _check_unexpected_exit(scan_task, server_task, done)
+        exit_code = _check_unexpected_exit(workers, done)
     finally:
         logger.info("Shutting down...")
         server.should_exit = True
-        scan_task.cancel()
+        for task in workers:
+            if task is not server_task:
+                task.cancel()
         stop_task.cancel()
         try:
-            await asyncio.gather(
-                scan_task, server_task, stop_task, return_exceptions=True
-            )
+            await asyncio.gather(*workers, stop_task, return_exceptions=True)
         finally:
             watcher.stop()
             await writer.close()
@@ -185,13 +193,12 @@ async def _supervise(  # noqa: PLR0913
 
 
 def _check_unexpected_exit(
-    scan_task: asyncio.Task[None],
-    server_task: asyncio.Task[None],
+    workers: dict[asyncio.Task[None], str],
     done: set[asyncio.Task[None]],
 ) -> int:
     """Log tasks that ended before a shutdown signal; return the exit status."""
     exit_code = 0
-    for task, name in ((scan_task, "BLE scanner"), (server_task, "Admin API server")):
+    for task, name in workers.items():
         if task not in done:
             continue
         exit_code = 1

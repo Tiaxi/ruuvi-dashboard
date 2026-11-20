@@ -37,8 +37,13 @@ class FakeWatcher:
         self.stopped = True
 
 
+async def _wait_forever():
+    await asyncio.Event().wait()
+
+
 class FakeWriter:
     instances = []
+    run_impl = staticmethod(_wait_forever)
 
     def __init__(self, url, min_write_interval):
         self.closed = False
@@ -46,6 +51,12 @@ class FakeWriter:
 
     def update_min_interval(self, seconds):
         pass
+
+    def submit(self, reading, name, rssi=None):
+        pass
+
+    async def run(self):
+        await FakeWriter.run_impl()
 
     async def close(self):
         self.closed = True
@@ -76,6 +87,7 @@ def collector_env(tmp_path, monkeypatch):
     monkeypatch.setattr(FakeServer, "on_serve", None)
     FakeWatcher.instances = []
     FakeWriter.instances = []
+    monkeypatch.setattr(FakeWriter, "run_impl", staticmethod(_wait_forever))
 
 
 def assert_cleaned_up():
@@ -151,6 +163,24 @@ class TestScannerSupervision:
         assert exit_code == 1
         assert_cleaned_up()
         assert "Admin API server failed" in caplog.text
+
+    async def test_writer_end_exits_nonzero_and_cleans_up(
+        self, collector_env, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(main, "RuuviScanner", make_scanner(run_forever))
+
+        async def writer_dies():
+            await asyncio.sleep(0.05)
+            msg = "writer worker crashed"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(FakeWriter, "run_impl", staticmethod(writer_dies))
+
+        exit_code = await asyncio.wait_for(main.run(), timeout=5)
+
+        assert exit_code == 1
+        assert_cleaned_up()
+        assert "Metrics writer failed" in caplog.text
 
     def test_main_exits_with_run_status(self, monkeypatch):
         async def fake_run():

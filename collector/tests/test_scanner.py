@@ -40,3 +40,29 @@ class TestScannerRun:
 
         assert scanner.status == ScannerStatus.STOPPED
         bleak.stop.assert_awaited_once()
+
+
+class TestReadingHandoff:
+    async def test_reading_updates_live_store_and_hands_write_to_worker(self):
+        from conftest import make_reading
+
+        from config import TagConfig
+        from writer import MetricsWriter
+
+        config = AppConfig(tags=[TagConfig(mac="AA:BB:CC:DD:EE:FF", name="Sauna")])
+        # No worker runs, as if the database were down: nothing may wait on it.
+        writer = MetricsWriter("http://127.0.0.1:9")
+        readings = ReadingsStore()
+        scanner = RuuviScanner(config, writer=writer, readings=readings)
+
+        for seq in range(50):
+            reading = make_reading(measurement_sequence=seq)
+            scanner._schedule_reading(reading, -60)  # noqa: SLF001
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+        latest = await readings.get_by_mac("AA:BB:CC:DD:EE:FF")
+        assert latest.reading.measurement_sequence == 49
+        assert writer.pending_count == 1
+        await writer.close()
