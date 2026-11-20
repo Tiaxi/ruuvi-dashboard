@@ -172,7 +172,8 @@
   .toast.visible { opacity: 1; transform: translateY(0); }
 
   .empty { padding: 2rem; text-align: center; color: var(--text-muted); font-style: italic; }
-  .toggle { cursor: pointer; font-size: 1.1rem; }
+  .toggle { cursor: pointer; font-size: 1.1rem; background: none; border: none; padding: 0 0.2rem; }
+  .toggle:hover { background: none; }
   .mac { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 0.82rem; color: var(--text-secondary); }
   .reading-null { color: var(--text-muted); }
 
@@ -266,7 +267,7 @@
     </div>
   </section>
 </main>
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
 // Absolute origin, so fetch works even when the page was opened through a
@@ -350,12 +351,15 @@ function singleFlight(fn) {
 const settingsLoader = singleFlight(loadSettings);
 
 const liveData = singleFlight(async () => {
+  const mutationsBefore = mutations;
   const [tags, discovered, health] = await Promise.allSettled([
     getJson('/api/tags'),
     getJson('/api/discovered'),
     getJson('/api/health'),
   ]);
-  if (tags.status === 'fulfilled') renderTags(tags.value);
+  // Tags fetched before a change finished may show the old state; the
+  // refresh queued after the change renders the new one.
+  if (tags.status === 'fulfilled' && mutationsBefore === mutations) renderTags(tags.value);
   if (discovered.status === 'fulfilled') renderDiscovered(discovered.value);
   if ([tags, discovered, health].every(r => r.status === 'fulfilled')) {
     renderHealth(health.value);
@@ -438,13 +442,38 @@ function fmtTime(ts) {
   return d.toLocaleTimeString();
 }
 
+// Latest tag list, for names in announcements and local reordering. The
+// table itself may lag behind it while Space is held (see renderTags).
+let renderedTags = [];
+
+function tagName(mac) {
+  return renderedTags.find(t => t.mac === mac)?.name ?? mac;
+}
+
+// A button activates on Space keyup; replacing it while Space is held
+// would drop the press, so re-rendering waits for the key to be released.
+let spaceHeld = false;
+document.getElementById('tags-body').addEventListener('keydown', e => {
+  if (e.key === ' ') spaceHeld = true;
+});
+document.addEventListener('keyup', e => { if (e.key === ' ') spaceHeld = false; });
+window.addEventListener('blur', () => { spaceHeld = false; });
+
 function renderTags(tags) {
+  renderedTags = tags;
+  if (spaceHeld) return;
   const tbody = document.getElementById('tags-body');
+  // Re-rendering replaces the row buttons; put focus back on the same
+  // control of the same tag so keyboard users keep their place.
+  const active = document.activeElement;
+  const focused = tbody.contains(active) && active.dataset.control
+    ? {mac: active.closest('tr').dataset.mac, control: active.dataset.control}
+    : null;
   if (tags.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="empty">No tags configured</td></tr>';
     return;
   }
-  tbody.innerHTML = tags.map(t => `
+  tbody.innerHTML = tags.map((t, i) => `
     <tr draggable="true" data-mac="${t.mac}"
         ondragstart="dragStart(event)" ondragover="dragOver(event)"
         ondrop="drop(event)" ondragend="dragEnd(event)">
@@ -457,13 +486,31 @@ function renderTags(tags) {
       <td>${fmt(t.reading?.battery_voltage, ' V', 2)}</td>
       <td>${t.rssi != null ? t.rssi + ' dBm' : '<span class="reading-null">\u2014</span>'}</td>
       <td>${fmtTime(t.last_seen)}</td>
-      <td><span class="toggle" onclick="toggleTag('${t.mac}', ${!t.enabled})">${t.enabled ? '\u2705' : '\u274c'}</span></td>
+      <td><button type="button" class="toggle" data-control="toggle" aria-pressed="${t.enabled}"
+          aria-label="Enabled: ${esc(t.name)}"
+          onclick="toggleTag('${t.mac}', ${!t.enabled})">${t.enabled ? '\u2705' : '\u274c'}</button></td>
       <td class="actions">
-        <button onclick="editTag('${t.mac}')">Edit</button>
-        <button class="danger" onclick="deleteTag('${t.mac}')">Delete</button>
+        <button type="button" data-control="up" title="Move up" aria-label="Move up: ${esc(t.name)}"
+          onclick="moveTag('${t.mac}', -1)"${i === 0 ? ' disabled' : ''}>&#x2191;</button>
+        <button type="button" data-control="down" title="Move down" aria-label="Move down: ${esc(t.name)}"
+          onclick="moveTag('${t.mac}', 1)"${i === tags.length - 1 ? ' disabled' : ''}>&#x2193;</button>
+        <button type="button" data-control="edit" onclick="editTag('${t.mac}')">Edit</button>
+        <button type="button" data-control="delete" class="danger" onclick="deleteTag('${t.mac}')">Delete</button>
       </td>
     </tr>
   `).join('');
+  if (focused) restoreFocus(tbody, focused);
+}
+
+function restoreFocus(tbody, {mac, control}) {
+  const row = [...tbody.querySelectorAll('tr[data-mac]')].find(r => r.dataset.mac === mac);
+  if (!row) return;
+  // A move button is disabled once its tag reaches the end; use the other one.
+  const other = {up: 'down', down: 'up'}[control];
+  const target = [control, other]
+    .map(c => c && row.querySelector(`[data-control="${c}"]`))
+    .find(el => el && !el.disabled);
+  if (target) target.focus();
 }
 
 function renderDiscovered(tags) {
@@ -484,6 +531,9 @@ function renderDiscovered(tags) {
   `).join('');
 }
 
+// Changes sent so far; lets a poll tell whether its data may predate one.
+let mutations = 0;
+
 // Send a change to the API. On failure tell the user why and return null.
 async function mutate(action, path, options) {
   let res;
@@ -492,6 +542,8 @@ async function mutate(action, path, options) {
   } catch (e) {
     alert(`Error: could not ${action}: the collector did not respond. Check the connection and try again.`);
     return null;
+  } finally {
+    mutations++;
   }
   if (res.ok) return res;
   let detail = `HTTP ${res.status}`;
@@ -530,7 +582,31 @@ async function deleteTag(mac) {
 
 async function toggleTag(mac, enabled) {
   const action = `${enabled ? 'enable' : 'disable'} tag ${mac}`;
-  await mutate(action, `/api/tags/${mac}`, jsonRequest('PATCH', {enabled}));
+  if (await mutate(action, `/api/tags/${mac}`, jsonRequest('PATCH', {enabled}))) {
+    showToast(`${tagName(mac)} ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  refresh();
+}
+
+// Keyboard-operable alternative to drag-and-drop. Moves run one at a time
+// and each starts from the order the previous one left on screen.
+let moveQueue = Promise.resolve();
+
+function moveTag(mac, delta) {
+  moveQueue = moveQueue.then(() => moveTagNow(mac, delta));
+}
+
+async function moveTagNow(mac, delta) {
+  const tags = [...renderedTags];
+  const from = tags.findIndex(t => t.mac === mac);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= tags.length) return;
+  tags.splice(to, 0, ...tags.splice(from, 1));
+  const macs = tags.map(t => t.mac);
+  if (await mutate(`move tag ${mac}`, '/api/tags/order', jsonRequest('PUT', {macs}))) {
+    renderTags(tags);
+    showToast(`${tagName(mac)} moved ${delta < 0 ? 'up' : 'down'} to position ${to + 1} of ${tags.length}`);
+  }
   refresh();
 }
 
@@ -579,17 +655,22 @@ async function saveSettings() {
   refresh();
 }
 
+// The toast is also a polite live region, so screen readers announce it.
+let toastTimer;
+
 function showToast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('visible');
-  setTimeout(() => el.classList.remove('visible'), 2000);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible'), 2000);
 }
 
+// Escape text for HTML content and double-quoted attribute values.
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, '&quot;');
 }
 
 // Drag-and-drop tag reordering
