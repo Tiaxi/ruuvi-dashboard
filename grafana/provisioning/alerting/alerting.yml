@@ -1,0 +1,6 @@
+# Grafana alerting provisioning: contact points, notification policies,
+# alert rules, mute timings and templates placed in this directory are
+# loaded at startup. This file provisions nothing; it keeps the directory
+# present so Grafana does not log a missing-directory error.
+# See https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/
+apiVersion: 1
