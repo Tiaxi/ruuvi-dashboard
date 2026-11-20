@@ -40,6 +40,7 @@ class RuuviScanner:
         self._readings = readings
         self._loop: asyncio.AbstractEventLoop | None = None
         self._seen_macs: set[str] = set()
+        self._tasks: set[asyncio.Future[None]] = set()
         self.status = ScannerStatus.STARTING
 
     def update_config(self, config: AppConfig) -> None:
@@ -64,10 +65,14 @@ class RuuviScanner:
         rssi = advertisement_data.rssi
 
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(
-                asyncio.ensure_future,
-                self._process_reading(reading, rssi),
-            )
+            self._loop.call_soon_threadsafe(self._schedule_reading, reading, rssi)
+
+    def _schedule_reading(self, reading: RuuviReading, rssi: int) -> None:
+        # The task only updates in-memory state and hands the write to the
+        # writer worker, so it finishes right away; keep a reference until then.
+        task = asyncio.ensure_future(self._process_reading(reading, rssi))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _process_reading(self, reading: RuuviReading, rssi: int) -> None:
         await self._readings.update(reading.mac, reading, rssi)
@@ -86,7 +91,7 @@ class RuuviScanner:
         enabled = self._config.enabled_tags_map
         tag = enabled.get(reading.mac)
         if tag is not None:
-            await self._writer.write(reading, tag.name, rssi=rssi)
+            self._writer.submit(reading, tag.name, rssi=rssi)
 
     async def run(self) -> None:
         """Start the BLE scanner and process readings until cancelled.
