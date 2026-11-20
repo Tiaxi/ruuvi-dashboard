@@ -453,9 +453,11 @@ function tagName(mac) {
 // A button activates on Space keyup; replacing it while Space is held
 // would drop the press, so re-rendering waits for the key to be released.
 let spaceHeld = false;
-document.getElementById('tags-body').addEventListener('keydown', e => {
-  if (e.key === ' ') spaceHeld = true;
-});
+for (const id of ['tags-body', 'discovered-body']) {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === ' ') spaceHeld = true;
+  });
+}
 document.addEventListener('keyup', e => { if (e.key === ' ') spaceHeld = false; });
 window.addEventListener('blur', () => { spaceHeld = false; });
 
@@ -463,12 +465,7 @@ function renderTags(tags) {
   renderedTags = tags;
   if (spaceHeld) return;
   const tbody = document.getElementById('tags-body');
-  // Re-rendering replaces the row buttons; put focus back on the same
-  // control of the same tag so keyboard users keep their place.
-  const active = document.activeElement;
-  const focused = tbody.contains(active) && active.dataset.control
-    ? {mac: active.closest('tr').dataset.mac, control: active.dataset.control}
-    : null;
+  const focused = focusedControl(tbody);
   if (tags.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="empty">No tags configured</td></tr>';
     return;
@@ -494,12 +491,23 @@ function renderTags(tags) {
           onclick="moveTag('${t.mac}', -1)"${i === 0 ? ' disabled' : ''}>&#x2191;</button>
         <button type="button" data-control="down" title="Move down" aria-label="Move down: ${esc(t.name)}"
           onclick="moveTag('${t.mac}', 1)"${i === tags.length - 1 ? ' disabled' : ''}>&#x2193;</button>
-        <button type="button" data-control="edit" onclick="editTag('${t.mac}')">Edit</button>
-        <button type="button" data-control="delete" class="danger" onclick="deleteTag('${t.mac}')">Delete</button>
+        <button type="button" data-control="edit" aria-label="Edit: ${esc(t.name)}"
+          onclick="editTag('${t.mac}')">Edit</button>
+        <button type="button" data-control="delete" class="danger" aria-label="Delete: ${esc(t.name)}"
+          onclick="deleteTag('${t.mac}')">Delete</button>
       </td>
     </tr>
   `).join('');
   if (focused) restoreFocus(tbody, focused);
+}
+
+// Re-rendering a table replaces its row buttons. These two put focus back
+// on the same control of the same tag so keyboard users keep their place.
+function focusedControl(tbody) {
+  const active = document.activeElement;
+  return tbody.contains(active) && active.dataset.control
+    ? {mac: active.closest('tr').dataset.mac, control: active.dataset.control}
+    : null;
 }
 
 function restoreFocus(tbody, {mac, control}) {
@@ -514,22 +522,26 @@ function restoreFocus(tbody, {mac, control}) {
 }
 
 function renderDiscovered(tags) {
+  if (spaceHeld) return;
   const tbody = document.getElementById('discovered-body');
+  const focused = focusedControl(tbody);
   if (tags.length === 0) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">No discovered tags</td></tr>';
     return;
   }
   tbody.innerHTML = tags.map(t => `
-    <tr>
+    <tr data-mac="${esc(t.mac)}">
       <td class="mac">${esc(t.mac)}</td>
       <td>${fmt(t.reading?.temperature, '\u00b0C', 1)}</td>
       <td>${fmt(t.reading?.humidity, '%', 1)}</td>
       <td>${fmt(t.reading?.battery_voltage, ' V', 2)}</td>
       <td>${t.rssi != null ? t.rssi + ' dBm' : '\u2014'}</td>
       <td>${fmtTime(t.last_seen)}</td>
-      <td><button class="success" onclick="addTag('${t.mac}')">Add</button></td>
+      <td><button type="button" data-control="add" class="success" aria-label="Add: ${esc(t.mac)}"
+          onclick="addTag('${t.mac}')">Add</button></td>
     </tr>
   `).join('');
+  if (focused) restoreFocus(tbody, focused);
 }
 
 // Changes sent so far; lets a poll tell whether its data may predate one.
