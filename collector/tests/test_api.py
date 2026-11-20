@@ -100,7 +100,7 @@ class TestHealthEndpoint:
         assert resp.json()["scanner"] == "failed"
 
 
-from conftest import failing, make_reading
+from conftest import FakeClock, failing, make_reading
 
 
 class TestGetTags:
@@ -146,6 +146,28 @@ class TestGetDiscovered:
     async def test_empty_when_no_discoveries(self, client):
         resp = await client.get("/api/discovered")
         assert resp.json() == []
+
+    async def test_omits_expired_discoveries(self, client, app_state):
+        clock = FakeClock()
+        app_state.readings = ReadingsStore(clock=clock)
+        await app_state.readings.update("AA:BB:CC:DD:EE:FF", make_reading(), rssi=-65)
+        await app_state.readings.update(
+            "11:22:33:44:55:66", make_reading(mac="11:22:33:44:55:66"), rssi=-70
+        )
+        clock.now += config_module.DISCOVERY_TTL_SECONDS / 2
+        await app_state.readings.update(
+            "22:33:44:55:66:77", make_reading(mac="22:33:44:55:66:77"), rssi=-70
+        )
+        clock.now += config_module.DISCOVERY_TTL_SECONDS / 2 + 1
+
+        resp = await client.get("/api/discovered")
+        assert [t["mac"] for t in resp.json()] == ["22:33:44:55:66:77"]
+        assert resp.json()[0]["last_seen"] == pytest.approx(
+            clock.now - config_module.DISCOVERY_TTL_SECONDS / 2 - 1
+        )
+        # The configured tag keeps its last reading however old it is.
+        tags = (await client.get("/api/tags")).json()
+        assert tags[0]["reading"] is not None
 
 
 class TestPostTag:

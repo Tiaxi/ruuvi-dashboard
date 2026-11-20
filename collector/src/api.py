@@ -237,8 +237,9 @@ def create_app(state: AppState, *, admin_password: str) -> FastAPI:
 
     @app.get("/api/discovered")
     async def get_discovered() -> list[dict[str, Any]]:
-        all_readings = await state.readings.get_all()
         configured_macs = {t.mac for t in state.config.tags}
+        await state.readings.prune(keep=configured_macs)
+        all_readings = await state.readings.get_all()
         result = []
         for mac, tr in all_readings.items():
             if mac not in configured_macs:

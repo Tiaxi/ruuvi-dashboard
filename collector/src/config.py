@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,19 +145,77 @@ class TagReading:
     last_seen: float
 
 
-class ReadingsStore:
-    """Thread-safe in-memory store for the latest reading per tag."""
+# An unconfigured tag not heard from for this long is dropped from the store,
+# so it leaves the discovered list and is logged again if it comes back.
+DISCOVERY_TTL_SECONDS = 15 * 60
+# At most this many unconfigured tags are kept; the least recently seen go first.
+MAX_DISCOVERED_TAGS = 100
+# Expired unconfigured tags are swept on update at most this often.
+PRUNE_INTERVAL_SECONDS = 60
 
-    def __init__(self) -> None:
+
+class ReadingsStore:
+    """Thread-safe in-memory store for the latest reading per tag.
+
+    Readings of configured tags are kept until removed. Readings of other
+    (discovered) tags expire after ``DISCOVERY_TTL_SECONDS`` and at most
+    ``MAX_DISCOVERED_TAGS`` of them are kept. Callers pass the configured
+    MACs as ``keep``.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self._tags: dict[str, TagReading] = {}
         self._lock = asyncio.Lock()
+        self._clock = clock
+        self._next_prune = 0.0
 
-    async def update(self, mac: str, reading: RuuviReading, rssi: int) -> None:
-        """Store or replace the latest reading for a MAC address."""
+    async def update(
+        self,
+        mac: str,
+        reading: RuuviReading,
+        rssi: int,
+        keep: Collection[str] = (),
+    ) -> bool:
+        """Store or replace the latest reading for a MAC address.
+
+        Returns True when the tag is new to the store or had not been seen
+        for ``DISCOVERY_TTL_SECONDS``, i.e. when it was (re)discovered.
+        """
         async with self._lock:
-            self._tags[mac] = TagReading(
-                reading=reading, rssi=rssi, last_seen=time.time()
+            now = self._clock()
+            previous = self._tags.get(mac)
+            discovered = (
+                previous is None or now - previous.last_seen > DISCOVERY_TTL_SECONDS
             )
+            self._tags[mac] = TagReading(reading=reading, rssi=rssi, last_seen=now)
+            if previous is None and mac not in keep:
+                self._enforce_cap(keep)
+            if now >= self._next_prune:
+                self._prune_expired(now, keep)
+            return discovered
+
+    async def prune(self, keep: Collection[str]) -> None:
+        """Drop expired and over-cap readings of tags not in ``keep``."""
+        async with self._lock:
+            self._prune_expired(self._clock(), keep)
+            self._enforce_cap(keep)
+
+    def _prune_expired(self, now: float, keep: Collection[str]) -> None:
+        self._next_prune = now + PRUNE_INTERVAL_SECONDS
+        cutoff = now - DISCOVERY_TTL_SECONDS
+        for mac in [
+            m for m, tr in self._tags.items() if m not in keep and tr.last_seen < cutoff
+        ]:
+            del self._tags[mac]
+
+    def _enforce_cap(self, keep: Collection[str]) -> None:
+        unconfigured = [m for m in self._tags if m not in keep]
+        excess = len(unconfigured) - MAX_DISCOVERED_TAGS
+        if excess <= 0:
+            return
+        unconfigured.sort(key=lambda m: self._tags[m].last_seen)
+        for mac in unconfigured[:excess]:
+            del self._tags[mac]
 
     async def get_all(self) -> dict[str, TagReading]:
         """Return a snapshot of all stored readings."""

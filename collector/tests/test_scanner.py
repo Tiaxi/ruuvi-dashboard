@@ -1,10 +1,18 @@
 import asyncio
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import FakeClock, mac_for, make_reading
 
 import scanner as scanner_module
-from config import AppConfig, ReadingsStore
+from config import (
+    DISCOVERY_TTL_SECONDS,
+    MAX_DISCOVERED_TAGS,
+    AppConfig,
+    ReadingsStore,
+    TagConfig,
+)
 from scanner import RuuviScanner, ScannerStatus
 
 
@@ -66,3 +74,46 @@ class TestReadingHandoff:
         assert latest.reading.measurement_sequence == 49
         assert writer.pending_count == 1
         await writer.close()
+
+
+class TestDiscoveryBookkeeping:
+    def _discoveries(self, caplog) -> list[str]:
+        return [
+            r.args[0] for r in caplog.records if r.msg.startswith("Discovered Ruuvi")
+        ]
+
+    async def test_tag_back_after_ttl_is_logged_again(self, caplog):
+        caplog.set_level(logging.INFO, logger="scanner")
+        clock = FakeClock()
+        scanner = RuuviScanner(
+            AppConfig(), writer=None, readings=ReadingsStore(clock=clock)
+        )
+        process = scanner._process_reading  # noqa: SLF001 - what the callback runs
+        reading = make_reading(mac="11:22:33:44:55:66")
+
+        await process(reading, -70)
+        await process(reading, -70)
+        assert self._discoveries(caplog) == ["11:22:33:44:55:66"]
+
+        clock.now += DISCOVERY_TTL_SECONDS + 1
+        await process(reading, -70)
+        assert self._discoveries(caplog) == ["11:22:33:44:55:66"] * 2
+
+    async def test_transient_tags_do_not_evict_configured_tag(self):
+        clock = FakeClock()
+        store = ReadingsStore(clock=clock)
+        config = AppConfig(
+            tags=[TagConfig(mac="AA:BB:CC:DD:EE:FF", name="Room", enabled=False)]
+        )
+        scanner = RuuviScanner(config, writer=None, readings=store)
+        process = scanner._process_reading  # noqa: SLF001 - what the callback runs
+
+        await process(make_reading(), -60)
+        for i in range(MAX_DISCOVERED_TAGS + 10):
+            clock.now += 1
+            await process(make_reading(mac=mac_for(i)), -70)
+        clock.now += DISCOVERY_TTL_SECONDS + 1
+        await process(make_reading(mac="11:22:33:44:55:66"), -70)
+
+        stored = await store.get_all()
+        assert set(stored) == {"AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"}

@@ -242,7 +242,7 @@
       <table>
         <thead>
           <tr>
-            <th>MAC</th><th>Temp</th><th>Humidity</th><th>Battery</th><th>RSSI</th><th>Actions</th>
+            <th>MAC</th><th>Temp</th><th>Humidity</th><th>Battery</th><th>RSSI</th><th>Last Seen</th><th>Actions</th>
           </tr>
         </thead>
         <tbody id="discovered-body"></tbody>
@@ -516,7 +516,7 @@ function restoreFocus(tbody, {mac, control}) {
 function renderDiscovered(tags) {
   const tbody = document.getElementById('discovered-body');
   if (tags.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No discovered tags</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No discovered tags</td></tr>';
     return;
   }
   tbody.innerHTML = tags.map(t => `
@@ -526,6 +526,7 @@ function renderDiscovered(tags) {
       <td>${fmt(t.reading?.humidity, '%', 1)}</td>
       <td>${fmt(t.reading?.battery_voltage, ' V', 2)}</td>
       <td>${t.rssi != null ? t.rssi + ' dBm' : '\u2014'}</td>
+      <td>${fmtTime(t.last_seen)}</td>
       <td><button class="success" onclick="addTag('${t.mac}')">Add</button></td>
     </tr>
   `).join('');
