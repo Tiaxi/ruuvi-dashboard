@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from enum import StrEnum
 
 from bleak import AdvertisementData, BleakScanner, BLEDevice
 
@@ -14,6 +15,15 @@ from writer import MetricsWriter
 logger = logging.getLogger(__name__)
 
 RUUVI_COMPANY_ID = 0x0499
+
+
+class ScannerStatus(StrEnum):
+    """Lifecycle state of the BLE scanner, reported by /api/health."""
+
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPED = "stopped"
+    FAILED = "failed"
 
 
 class RuuviScanner:
@@ -30,6 +40,7 @@ class RuuviScanner:
         self._readings = readings
         self._loop: asyncio.AbstractEventLoop | None = None
         self._seen_macs: set[str] = set()
+        self.status = ScannerStatus.STARTING
 
     def update_config(self, config: AppConfig) -> None:
         """Apply a new configuration (e.g. after tag changes)."""
@@ -78,21 +89,29 @@ class RuuviScanner:
             await self._writer.write(reading, tag.name, rssi=rssi)
 
     async def run(self) -> None:
-        """Start the BLE scanner and process readings until cancelled."""
-        self._loop = asyncio.get_running_loop()
-        scanner = BleakScanner(detection_callback=self._detection_callback)
+        """Start the BLE scanner and process readings until cancelled.
 
+        Errors are re-raised after marking the scanner failed, so the caller
+        can shut the collector down and let the container restart it.
+        """
+        self._loop = asyncio.get_running_loop()
+        self.status = ScannerStatus.STARTING
         logger.info("Starting BLE scan...")
-        await scanner.start()
         try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("BLE scan error")
-        finally:
-            logger.info("Stopping BLE scan...")
+            scanner = BleakScanner(detection_callback=self._detection_callback)
+            await scanner.start()
+            self.status = ScannerStatus.RUNNING
             try:
-                await scanner.stop()
-            except Exception:
-                logger.debug("Error stopping scanner (expected during shutdown)")
+                await asyncio.Event().wait()
+            finally:
+                logger.info("Stopping BLE scan...")
+                try:
+                    await scanner.stop()
+                except Exception:
+                    logger.debug("Error stopping scanner (expected during shutdown)")
+        except asyncio.CancelledError:
+            self.status = ScannerStatus.STOPPED
+            raise
+        except Exception:
+            self.status = ScannerStatus.FAILED
+            raise
