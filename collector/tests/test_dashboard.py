@@ -6,12 +6,21 @@ import yaml
 from conftest import failing
 
 import fileutil
+from config import TagConfig
 from dashboard import generate_dashboard, write_dashboard
+
+
+def _tags(*names: str) -> list[TagConfig]:
+    """Build tags with distinct MACs and the given display names."""
+    return [
+        TagConfig(mac=f"AA:BB:CC:DD:EE:{i:02X}", name=name)
+        for i, name in enumerate(names)
+    ]
 
 
 class TestGenerateDashboard:
     def test_returns_valid_json_structure(self):
-        d = generate_dashboard(["Room A", "Room B"])
+        d = generate_dashboard(_tags("Room A", "Room B"))
         assert d["title"] == "Ruuvi Dashboard"
         assert d["uid"] == "ruuvi-sensors"
         assert "panels" in d
@@ -25,7 +34,7 @@ class TestGenerateDashboard:
             / "grafana/provisioning/datasources/victoriametrics.yml"
         )
         uid = yaml.safe_load(provisioning.read_text())["datasources"][0]["uid"]
-        d = generate_dashboard(["A", "B"])
+        d = generate_dashboard(_tags("A", "B"))
         queried = [p for p in d["panels"] if p["type"] != "row"]
         assert queried
         for panel in queried:
@@ -34,18 +43,18 @@ class TestGenerateDashboard:
                 assert target["datasource"] == {"type": "prometheus", "uid": uid}
 
     def test_custom_title(self):
-        d = generate_dashboard(["A"], title="My Weather")
+        d = generate_dashboard(_tags("A"), title="My Weather")
         assert d["title"] == "My Weather"
 
     def test_first_section_identifies_kiosk_dashboard(self):
-        d = generate_dashboard(["A"], title="My Weather")
+        d = generate_dashboard(_tags("A"), title="My Weather")
         first_panel = d["panels"][0]
         assert first_panel["type"] == "row"
         assert first_panel["title"] == "My Weather - Temperatures"
         assert first_panel["gridPos"] == {"h": 1, "w": 24, "x": 0, "y": 0}
 
     def test_sections_remain_collapsible_rows(self):
-        d = generate_dashboard(["A"], title="My Weather")
+        d = generate_dashboard(_tags("A"), title="My Weather")
         rows = [p for p in d["panels"] if p["type"] == "row"]
         assert [p["title"] for p in rows] == [
             "My Weather - Temperatures",
@@ -56,7 +65,7 @@ class TestGenerateDashboard:
         assert all(p["collapsed"] is False for p in rows)
 
     def test_temperature_stat_panels_match_tag_order(self):
-        d = generate_dashboard(["Zebra", "Alpha", "Middle"])
+        d = generate_dashboard(_tags("Zebra", "Alpha", "Middle"))
         temp_stats = [
             p
             for p in d["panels"]
@@ -68,7 +77,7 @@ class TestGenerateDashboard:
         assert temp_stats[2]["title"] == "Middle"
 
     def test_humidity_stat_panels_match_tag_order(self):
-        d = generate_dashboard(["A", "B"])
+        d = generate_dashboard(_tags("A", "B"))
         hum_stats = [
             p
             for p in d["panels"]
@@ -79,17 +88,17 @@ class TestGenerateDashboard:
         assert hum_stats[1]["title"] == "B"
 
     def test_empty_tags_produces_no_stat_panels(self):
-        d = generate_dashboard([])
+        d = generate_dashboard(_tags())
         stat_panels = [p for p in d["panels"] if p["type"] == "stat"]
         assert len(stat_panels) == 0
 
     def test_history_and_extra_panels_always_present(self):
-        d = generate_dashboard([])
+        d = generate_dashboard(_tags())
         timeseries = [p for p in d["panels"] if p["type"] == "timeseries"]
         assert len(timeseries) == 7
 
     def test_grid_positions_no_overlap(self):
-        d = generate_dashboard(["A", "B", "C", "D", "E", "F", "G", "H", "I"])
+        d = generate_dashboard(_tags("A", "B", "C", "D", "E", "F", "G", "H", "I"))
         occupied = set()
         for p in d["panels"]:
             gp = p["gridPos"]
@@ -102,19 +111,19 @@ class TestGenerateDashboard:
                     occupied.add(cell)
 
     def test_stat_panel_width_default_6_columns(self):
-        d = generate_dashboard(["A", "B", "C"])
+        d = generate_dashboard(_tags("A", "B", "C"))
         stats = [p for p in d["panels"] if p["type"] == "stat"]
         for s in stats:
             assert s["gridPos"]["w"] == 4  # 24 // 6
 
     def test_stat_panel_width_adapts_to_columns(self):
-        d = generate_dashboard(["A", "B"], columns_per_row=4)
+        d = generate_dashboard(_tags("A", "B"), columns_per_row=4)
         stats = [p for p in d["panels"] if p["type"] == "stat"]
         for s in stats:
             assert s["gridPos"]["w"] == 6  # 24 // 4
 
     def test_default_6_panels_per_row(self):
-        d = generate_dashboard(["A", "B", "C", "D", "E", "F", "G"])
+        d = generate_dashboard(_tags("A", "B", "C", "D", "E", "F", "G"))
         temp_stats = [
             p
             for p in d["panels"]
@@ -127,7 +136,7 @@ class TestGenerateDashboard:
         assert len(row2) == 1
 
     def test_custom_columns_per_row(self):
-        d = generate_dashboard(["A", "B", "C", "D", "E"], columns_per_row=3)
+        d = generate_dashboard(_tags("A", "B", "C", "D", "E"), columns_per_row=3)
         temp_stats = [
             p
             for p in d["panels"]
@@ -143,15 +152,15 @@ class TestGenerateDashboard:
 class TestWriteDashboard:
     def test_writes_json_file(self, tmp_path):
         path = str(tmp_path / "ruuvi.json")
-        write_dashboard(["Tag A"], path)
+        write_dashboard(_tags("Tag A"), path)
         d = json.loads(Path(path).read_text())
         assert d["uid"] == "ruuvi-sensors"
         assert any(p.get("title") == "Tag A" for p in d["panels"])
 
     def test_overwrites_existing(self, tmp_path):
         path = str(tmp_path / "ruuvi.json")
-        write_dashboard(["Old"], path)
-        write_dashboard(["New"], path)
+        write_dashboard(_tags("Old"), path)
+        write_dashboard(_tags("New"), path)
         d = json.loads(Path(path).read_text())
         titles = [p.get("title") for p in d["panels"]]
         assert "New" in titles
@@ -159,12 +168,73 @@ class TestWriteDashboard:
 
     def test_failed_write_keeps_previous_dashboard(self, tmp_path, monkeypatch):
         path = str(tmp_path / "ruuvi.json")
-        write_dashboard(["Old"], path)
+        write_dashboard(_tags("Old"), path)
         before = Path(path).read_text()
 
         monkeypatch.setattr(fileutil.os, "fsync", failing(OSError("disk full")))
         with pytest.raises(OSError, match="disk full"):
-            write_dashboard(["New"], path)
+            write_dashboard(_tags("New"), path)
 
         assert Path(path).read_text() == before
         json.loads(before)
+
+
+def _stat_exprs(d: dict, metric: str) -> list[str]:
+    return [
+        p["targets"][0]["expr"]
+        for p in d["panels"]
+        if p["type"] == "stat" and f"ruuvi_{metric}" in p["targets"][0]["expr"]
+    ]
+
+
+class TestStatSelectors:
+    def test_selects_series_by_mac_merged_across_renames(self):
+        tags = [TagConfig(mac="aa:bb:cc:dd:ee:01", name="Sauna")]
+        d = generate_dashboard(tags)
+        assert _stat_exprs(d, "temperature") == [
+            'max by (mac) (ruuvi_temperature{mac="AA:BB:CC:DD:EE:01"})'
+        ]
+        assert _stat_exprs(d, "humidity") == [
+            'max by (mac) (ruuvi_humidity{mac="AA:BB:CC:DD:EE:01"})'
+        ]
+
+    def test_same_name_sensors_get_distinct_selectors(self):
+        d = generate_dashboard(_tags("Room", "Room"))
+        exprs = _stat_exprs(d, "temperature")
+        assert len(exprs) == 2
+        assert exprs[0] != exprs[1]
+        stats = [p for p in d["panels"] if p["type"] == "stat"]
+        assert all(p["title"] == "Room" for p in stats)
+
+    def test_rename_keeps_the_same_selector(self):
+        mac = "AA:BB:CC:DD:EE:01"
+        before = generate_dashboard([TagConfig(mac=mac, name="Old")])
+        after = generate_dashboard([TagConfig(mac=mac, name="New")])
+        assert _stat_exprs(before, "temperature") == _stat_exprs(after, "temperature")
+
+    def test_names_with_quotes_and_backslashes_stay_out_of_queries(self):
+        name = 'Kid\'s "room" \\ 2'
+        d = generate_dashboard(_tags(name))
+        stats = [p for p in d["panels"] if p["type"] == "stat"]
+        assert [p["title"] for p in stats] == [name, name]
+        exprs = [t["expr"] for p in d["panels"] for t in p.get("targets", [])]
+        assert exprs
+        for expr in exprs:
+            assert "room" not in expr
+            assert "\\" not in expr
+
+
+class TestHistoryLegends:
+    def _legends(self, d: dict) -> set[str]:
+        return {
+            p["targets"][0]["legendFormat"]
+            for p in d["panels"]
+            if p["type"] == "timeseries"
+        }
+
+    def test_unique_names_use_name_legend(self):
+        assert self._legends(generate_dashboard(_tags("A", "B"))) == {"{{name}}"}
+
+    def test_duplicate_names_add_mac_to_legend(self):
+        d = generate_dashboard(_tags("Room", "Room"))
+        assert self._legends(d) == {"{{name}} ({{mac}})"}

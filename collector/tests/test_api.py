@@ -519,7 +519,7 @@ class TestApplyConfigFailures:
 
     @pytest.fixture
     def dashboard_before(self, app_state):
-        write_dashboard(["Room A"], app_state.dashboard_path)
+        write_dashboard(app_state.config.tags, app_state.dashboard_path)
         return Path(app_state.dashboard_path).read_text()
 
     async def test_dashboard_render_failure_changes_nothing(
