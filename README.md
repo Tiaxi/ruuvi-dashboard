@@ -35,7 +35,8 @@ git clone https://github.com/Tiaxi/ruuvi-dashboard.git
 cd ruuvi-dashboard
 
 cp .env.example .env
-nano .env                     # set GF_ADMIN_PASSWORD='<password>' (required, keep the single quotes)
+nano .env                     # set GF_ADMIN_PASSWORD='<password>' (required, keep the single quotes);
+                              # set PUID/PGID if `id -u` / `id -g` are not 1000
 cp config/config.yaml.example config/config.yaml
 
 docker compose up -d --build
@@ -43,7 +44,7 @@ docker compose up -d --build
 # Open the admin UI at http://<host>:8000 and log in as "admin". Unless
 # ADMIN_PASSWORD is set in .env, the collector generates a password a few
 # seconds after it starts; once `docker compose logs collector` mentions it:
-sudo cat config/admin_password
+cat config/admin_password
 # Open Grafana at http://<host>:3000 (sign in as admin with GF_ADMIN_PASSWORD)
 ```
 
@@ -66,10 +67,55 @@ Add tags via the admin UI — they appear in the dashboard within 30 seconds.
 | `GRAFANA_SUBPATH` | *(empty)* | Serve Grafana under a subpath (e.g. `/grafana/`) for reverse proxies; include the same path in `GRAFANA_ROOT_URL` |
 | `GRAFANA_ENFORCE_DOMAIN` | `false` | Redirect requests for any other hostname to `GRAFANA_DOMAIN`; set `true` for HTTPS/reverse proxy |
 | `GRAFANA_COOKIE_SECURE` | `false` | Send the Grafana login cookie over HTTPS only; set `true` for HTTPS/reverse proxy |
+| `PUID` / `PGID` | `1000` / `1000` | User and group ID the collector runs as; see [Running as your user](#running-as-your-user) |
 | `ADMIN_PORT` | `8000` | Host port for the admin UI |
 | `ADMIN_PASSWORD` | *(empty)* | Admin UI password for user `admin`; if empty, a random one is generated into `config/admin_password` |
 | `GRAFANA_PORT` | `3000` | Host port for Grafana |
 | `VM_RETENTION` | `1y` | VictoriaMetrics data retention period |
+
+### Running as your user
+
+The collector runs as the user and group ID set by `PUID` and `PGID` (default
+1000, the first user on Raspberry Pi OS), not as root. Files it writes to
+`config/` and `dashboards/` belong to that user, so you can read and edit them
+without `sudo`. Set both to the output of `id -u` and `id -g` for the user
+that owns the project folder. That user must be able to write to `config/` and
+`dashboards/`, and Grafana must be able to read `dashboards/`; both folders
+come with the clone, and the usual umask (022) gives that.
+
+**Bluetooth.** The collector talks to BlueZ through the host's system D-Bus.
+Raspberry Pi OS and Debian 12 (bookworm) let every user do that (their
+`/etc/dbus-1/system.d/bluetooth.conf` has `<allow send_destination="org.bluez"/>`
+under `<policy context="default">`), so scanning needs nothing more. If your
+host's policy only allows root and the `bluetooth` group, give the container
+that group by its host ID (`getent group bluetooth`), for example in a
+`docker-compose.override.yml`:
+
+```yaml
+services:
+  collector:
+    group_add:
+      - "112"   # the GID of the host's bluetooth group
+```
+
+Adding your host user to the group is not enough: D-Bus checks the groups of
+the container process.
+
+**Upgrading from a version that ran as root.** Older versions ran the
+collector as root, so `config/admin_password`, the generated dashboard, and
+possibly `config/config.yaml` and the `dashboards/` folder belong to root. The
+collector then stops at start with a "Permission denied" error in
+`docker compose logs collector`. Hand the files to your user once, before
+`git pull` (if `id -u` or `id -g` is not 1000, also add `PUID` and `PGID` to
+`.env`):
+
+```bash
+docker compose down
+mkdir -p dashboards
+sudo chown -R "$(id -u):$(id -g)" config dashboards   # the same IDs as PUID/PGID
+git pull
+docker compose up -d --build
+```
 
 ### HTTPS and reverse proxy
 
@@ -197,7 +243,7 @@ The collector serves a web UI on port 8000 (configurable via `ADMIN_PORT`):
 The admin UI and every `/api/*` route require HTTP Basic auth; only `GET /api/health` is open, for health checks. The user name is `admin`. The password is:
 
 - `ADMIN_PASSWORD` from `.env`, if set. Put it in single quotes, e.g. `ADMIN_PASSWORD='my pa$$word'`, so Compose does not expand `$` in it, and run `docker compose up -d` after changing it. Otherwise:
-- a random password generated on first start and saved to `config/admin_password`. The container writes it as root with mode 0600, so read it with `sudo cat config/admin_password`. The collector log says where it is but never prints the password. Edit the file to choose your own password, or delete it to generate a new one, then `docker compose restart collector`.
+- a random password generated on first start and saved to `config/admin_password`. It has mode 0600 and belongs to the `PUID` user, so read it with `cat config/admin_password`. The collector log says where it is but never prints the password. Edit the file to choose your own password, or delete it to generate a new one, then `docker compose restart collector`.
 
 Basic auth over plain HTTP is only as private as your LAN: anyone who can watch the traffic can read the password. If the admin UI is reachable from anywhere wider, put it behind a reverse proxy that serves HTTPS.
 

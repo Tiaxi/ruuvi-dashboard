@@ -2,6 +2,8 @@ services:
   collector:
     build: ./collector
     restart: unless-stopped
+    # Files written to ./config and ./dashboards belong to this user and group.
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "${ADMIN_PORT:-8000}:8000"
     volumes:

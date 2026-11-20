@@ -227,7 +227,21 @@ def _check_unexpected_exit(
 
 def main() -> None:
     """Run the collector and exit with its status."""
-    sys.exit(asyncio.run(run()))
+    try:
+        exit_code = asyncio.run(run())
+    except PermissionError as exc:
+        # Typical after upgrading from a root container: config/ and
+        # dashboards/ still hold files that only root may change.
+        logger.error(  # noqa: TRY400 - the hint matters, not the traceback
+            "%s. The collector runs as uid %d, gid %d; that user must own the "
+            "config and dashboards folders and the files in them. See "
+            "'Running as your user' in the README.",
+            exc,
+            os.getuid(),
+            os.getgid(),
+        )
+        exit_code = 1
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
